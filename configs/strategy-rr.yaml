@@ -1,0 +1,15 @@
+# Round-robin fairness policy (baseline)
+#
+# Simple rotation across sessions — no service tracking, no priority.
+# Each session gets equal turns regardless of compute consumed.
+# Used as a baseline comparator against program-aware LAS.
+
+featureGates:
+- flowControl
+
+flowControl:
+  defaultPriorityBand:
+    fairnessPolicyRef: round-robin-fairness-policy
+
+plugins:
+- type: round-robin-fairness-policy

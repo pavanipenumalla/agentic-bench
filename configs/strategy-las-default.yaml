@@ -1,0 +1,26 @@
+# Program-aware LAS with default exponential decay factor
+#
+# Same fairness model as las-halflife but uses a per-tick decay factor instead
+# of a time-based half-life. Service history decays by (1 - decayFactor) each
+# scheduling tick.
+#
+# Parameters:
+#   lasWeightService: 0.8      — weight for cumulative tokens served
+#   lasWeightHeadWait: 0.2     — weight for head-of-line wait time
+#   lasDecayFactor: 0.99997    — per-tick multiplicative decay (close to 1 = slow decay)
+#   lasHalfLifeSeconds: 0      — disabled (using decayFactor instead)
+
+featureGates:
+- flowControl
+
+flowControl:
+  defaultPriorityBand:
+    fairnessPolicyRef: program-aware-fairness
+
+plugins:
+- type: program-aware-fairness
+  parameters:
+    lasWeightService: 0.8
+    lasWeightHeadWait: 0.2
+    lasDecayFactor: 0.99997
+    lasHalfLifeSeconds: 0

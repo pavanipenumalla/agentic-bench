@@ -1,0 +1,70 @@
+# inference-perf configuration for OTel trace replay on cluster
+#
+# Replays agentic OTel traces against an llm-d serving endpoint.
+# Adjust <placeholders> to match your cluster setup.
+
+api:
+  type: chat
+  streaming: true
+  # Header used by the EPP scheduler to identify which session a request
+  # belongs to. inference-perf auto-generates a unique value per session.
+  session_id_header_key: "x-gateway-inference-fairness-id"
+
+data:
+  type: otel_trace_replay
+  otel_trace_replay:
+    # Source of agentic traces. Options:
+    #   hf_dataset_path: "org/dataset"         — download from HuggingFace Hub
+    #   trace_directory: "/path/to/traces/"    — load all .json files from a directory
+    #   trace_files: ["pattern*.json"]         — glob patterns for specific files
+    hf_dataset_path: "Exgentic/agent-llm-traces"
+
+    # Override recorded model names with the actual model deployed on cluster.
+    # Required when traces were recorded against a different model (e.g., GPT-4)
+    # but replay targets a local model.
+    use_static_model: true
+    static_model_name: "Qwen/Qwen3.6-35B-A3B-FP8"  # <-- replace with your model
+
+    # Fallback if a trace span doesn't specify max_tokens.
+    default_max_tokens: 200
+
+    # Skip error spans and unparseable files rather than failing the run.
+    include_errors: false
+    skip_invalid_files: true
+
+load:
+  type: trace_session_replay
+  base_seed: 42           # reproducibility
+  request_timeout: 300    # seconds — increase for large-context models
+
+  stages:
+    - concurrent_sessions: 5   # max sessions in flight simultaneously
+      num_sessions: 5          # total sessions to run (omit to run all available)
+      # session_rate: 2.0      # optional: cap new sessions started per second
+
+  # IMPORTANT: must be high. Dependency-graph events hold concurrency slots
+  # while waiting for predecessors (pure asyncio, zero threads). Low values
+  # create artificial bottlenecks that don't reflect real serving capacity.
+  # Rule of thumb: 50-100x concurrent_sessions.
+  worker_max_concurrency: 100
+
+server:
+  type: vllm
+  model_name: "Qwen/Qwen3.6-35B-A3B-FP8"  # <-- must match deployed model
+  # Cluster-internal service URL. Use svc.cluster.local — not the external route.
+  # This avoids VPN/ingress dependencies and minimizes network latency.
+  base_url: http://<epp-service>.<namespace>.svc.cluster.local
+
+storage:
+  local_storage:
+    # PVC mount point inside the Job container. Reports written here persist
+    # on the cluster even after the pod terminates.
+    path: "/data/reports"
+
+report:
+  request_lifecycle:
+    summary: true        # aggregate metrics (TTFT, TPOT, throughput)
+    per_stage: false
+    per_request: false
+  session_lifecycle:
+    per_session: true    # per-session breakdown — essential for fairness evaluation
