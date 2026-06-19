@@ -1,0 +1,47 @@
+api:
+  type: chat
+  streaming: true
+  session_id_header_key: "x-gateway-inference-fairness-id"
+
+data:
+  type: otel_trace_replay
+  otel_trace_replay:
+    hf_dataset_path: "Exgentic/agent-llm-traces"
+    use_static_model: true
+    static_model_name: "Qwen/Qwen3.6-35B-A3B-FP8"
+    default_max_tokens: 200
+    include_errors: false
+    skip_invalid_files: true
+
+load:
+  type: trace_session_replay
+  base_seed: 42
+  num_workers: 8
+  stages:
+    - concurrent_sessions: 2
+      num_sessions: 2
+      session_rate: 2
+  worker_max_concurrency: 200
+
+server:
+  type: vllm
+  model_name: Qwen/Qwen3.6-35B-A3B-FP8
+  base_url: http://GUIDE_NAME-epp.NAMESPACE.svc.cluster.local
+
+# metrics:
+#   type: prometheus
+#   prometheus:
+#     url: https://thanos-querier.openshift-monitoring.svc:9091
+#     scrape_interval: 15
+
+storage:
+  local_storage:
+    path: "/data/reports"
+
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: false
+    per_request: false
+  session_lifecycle:
+    per_session: true
