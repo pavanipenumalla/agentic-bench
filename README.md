@@ -53,7 +53,7 @@ Key aspects of the setup:
 
 | Backend | Directory | Notes |
 |---------|-----------|-------|
-| NVIDIA GPU / vLLM | `model-server/` (mirrors `llm-d/guides/agentic-serving/modelserver/gpu/vllm/`) | TP=2, FP8 KV cache |
+| NVIDIA H100 GPU / vLLM | `model-server/` (mirrors `llm-d/guides/agentic-serving/modelserver/gpu/vllm/`) | TP=2, FP8 KV cache |
 
 ---
 
@@ -251,19 +251,21 @@ path; behavior is unchanged from earlier runs, confirming the header change is c
 
 Fairness is about **completing sessions**, not raw token throughput.
 
-| Strategy | run1 | run2 | run3 | run4 |
-|---|---|---|---|---|
-| **LAS** | 89.7% | 90.8% | 89.5% | 89.9% |
-| **RR** | 89.4% | 89.9% | 89.9% | 89.9% |
-| **No-Fairness** | 44.7% | — | 42.2% | 42.0% |
+| Strategy | run1 | run2 | run3 | run4 | run5 (v0.9.0) |
+|---|---|---|---|---|---|
+| **LAS** | 89.7% | 90.8% | 89.5% | 89.9% | 88.8% |
+| **RR** | 89.4% | 89.9% | 89.9% | 89.9% | 90.2% |
+| **No-Fairness** | 44.7% | — | 42.2% | 42.0% | 44.5% |
+
+(run5 uses the released `ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0` image; runs 1–4 used the dev image — results are identical within noise, confirming the released image reproduces the behavior.)
 
 LAS and RR complete **~90%** of 1000 sessions; No-Fairness completes **~43%** — it lets a few heavy
 sessions monopolize the server and abandons the rest (their requests are cancelled when a
 predecessor times out).
 
-![Session failure rate by strategy](Replicas-2-TP-2-run1/comparison/session_failure_rate.png)
+![Session failure rate by strategy](Replicas-2-TP-2-run5/comparison/session_failure_rate.png)
 
-*run1 session failure rate — LAS 10.3%, RR 10.6%, No-Fairness 55.3%.*
+*run5 (v0.9.0) session failure rate — LAS 11.2%, RR 9.8%, No-Fairness 55.5%.*
 
 ### Program-duration CDFs by session size (LAS vs RR)
 
@@ -273,34 +275,34 @@ it completes too few sessions (and only the easy ones) for a meaningful duration
 
 | 2–7 requests | 7–12 requests |
 |:---:|:---:|
-| ![2-7 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_2-7_reqs.png) | ![7-12 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_7-12_reqs.png) |
+| ![2-7 reqs](Replicas-2-TP-2-run5/comparison/program_duration_cdf_2-7_reqs.png) | ![7-12 reqs](Replicas-2-TP-2-run5/comparison/program_duration_cdf_7-12_reqs.png) |
 | **12–26 requests** | **26–151 requests** |
-| ![12-26 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_12-26_reqs.png) | ![26-151 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_26-151_reqs.png) |
+| ![12-26 reqs](Replicas-2-TP-2-run5/comparison/program_duration_cdf_12-26_reqs.png) | ![26-151 reqs](Replicas-2-TP-2-run5/comparison/program_duration_cdf_26-151_reqs.png) |
 
-### Latency (run1, per-request, **succeeded requests only**)
+### Latency (run5 / v0.9.0, per-request, **succeeded requests only**)
 
 | Metric | LAS | RR | No-Fairness |
 |---|---|---|---|
-| TTFT p50 / p99 (s) | 178 / 597 | 188 / 595 | 7.9 / 778 |
-| ITL p50 / p99 (ms) | 21 / 311 | 17 / 268 | 32 / **1311** |
-| E2E p50 / p99 (s) | 220 / 613 | 233 / 562 | 126 / 696 |
-| requests counted | 18,230 | 17,883 | **12,615** |
+| TTFT p50 / p99 (s) | 198 / 627 | 203 / 610 | 7.7 / 781 |
+| ITL p50 / p99 (ms) | 21 / 329 | 18 / 284 | 66 / **5029** |
+| E2E p50 / p99 (s) | 217 / 648 | 236 / 603 | 125 / 717 |
+| requests counted | 17,851 | 17,936 | **12,597** |
 
 > ⚠️ **Read latency with completion %.** No-Fairness's *lower medians are survivorship bias* — it
-> only finished 12,615 of ~18,000 requests (the easy ones), so its "fast" numbers are measured on an
-> easier subset. Its honest cost shows in the **ITL p99 (1311 ms, ~4–5× LAS/RR)** and in completion.
+> only finished 12,597 of ~18,000 requests (the easy ones), so its "fast" numbers are measured on an
+> easier subset. Its honest cost shows in the **ITL p99 (5029 ms, ~15× LAS/RR)** and in completion.
 
-### Goodput & completion-normalized view (run1)
+### Goodput & completion-normalized view (run5 / v0.9.0)
 
 | Strategy | events completed / 20,523 | completion |
 |---|---|---|
-| LAS | 18,140 | **88.4%** |
-| RR | 17,821 | 86.8% |
-| No-Fairness | 12,613 | **61.5%** |
+| LAS | 17,752 | 86.5% |
+| RR | 17,855 | **87.0%** |
+| No-Fairness | 12,595 | **61.4%** |
 
 The fair way to compare latency is normalized over **all intended requests**: each strategy's CDF
 rises only to its completion ceiling, and the gap to 1.0 is abandoned work. See
-`plots/latency_comparison.py` → `*_cdf_allreqs.png` (No-Fairness plateaus at 0.61; LAS/RR reach ~0.88).
+`plots/latency_comparison.py` → `*_cdf_allreqs.png` (No-Fairness plateaus at 0.61; LAS/RR reach ~0.87).
 
 ### Takeaways
 

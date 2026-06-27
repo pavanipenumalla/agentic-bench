@@ -1,0 +1,24 @@
+Per-request latency comparison — run5 (SUCCEEDED requests only)
+WARNING: No-Fairness completes far fewer sessions; its latencies are survivorship-biased.
+
+== TTFT (s) ==
+Strategy        succeeded      mean       p50       p90       p99
+-----------------------------------------------------------------
+LAS                 17851    223.03    197.82    533.05    626.67
+RR                  17936    220.78    203.43    516.96    610.22
+No-Fairness         12597    149.70      7.72    544.62    781.42
+
+== ITL (ms) ==
+Strategy        succeeded      mean       p50       p90       p99
+-----------------------------------------------------------------
+LAS                 17851     59.06     20.96    190.70    328.60
+RR                  17936     50.73     18.10    173.39    283.67
+No-Fairness         12597    279.63     65.51    261.76   5029.46
+
+== E2E (s) ==
+Strategy        succeeded      mean       p50       p90       p99
+-----------------------------------------------------------------
+LAS                 17851    238.84    216.72    464.50    647.92
+RR                  17936    237.74    235.54    428.47    603.11
+No-Fairness         12597    144.09    125.05    228.96    717.33
+

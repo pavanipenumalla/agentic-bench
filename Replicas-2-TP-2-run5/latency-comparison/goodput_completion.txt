@@ -1,0 +1,7 @@
+Goodput & completion — run5 (the honest top-line)
+
+Strategy        events done / intended  completion  goodput(req/s)
+------------------------------------------------------------------
+LAS                   17752      20523       86.5%            1.38
+RR                    17855      20523       87.0%            1.41
+No-Fairness           12595      20523       61.4%            1.27

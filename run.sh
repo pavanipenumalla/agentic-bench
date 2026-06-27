@@ -61,15 +61,11 @@ for strat in $STRATEGIES; do
 apiVersion: inference.networking.x-k8s.io/v1alpha1
 kind: EndpointPickerConfig
 plugins:
+- type: agent-identity
 - type: queue-scorer
 - type: kv-cache-utilization-scorer
 - type: prefix-cache-scorer
 - type: program-aware-fairness
-  parameters:
-    strategy: "las"
-    lasWeightService: 0.8
-    lasWeightHeadWait: 0.2
-    lasDecayFactor: 0.99997
 featureGates:
 - flowControl
 flowControl:
@@ -90,6 +86,7 @@ YAML
 apiVersion: inference.networking.x-k8s.io/v1alpha1
 kind: EndpointPickerConfig
 plugins:
+- type: agent-identity
 - type: queue-scorer
 - type: kv-cache-utilization-scorer
 - type: prefix-cache-scorer
@@ -264,15 +261,11 @@ spec:
               apiVersion: inference.networking.x-k8s.io/v1alpha1
               kind: EndpointPickerConfig
               plugins:
+              - type: agent-identity
               - type: queue-scorer
               - type: kv-cache-utilization-scorer
               - type: prefix-cache-scorer
               - type: program-aware-fairness
-                parameters:
-                  strategy: "las"
-                  lasWeightService: 0.8
-                  lasWeightHeadWait: 0.2
-                  lasDecayFactor: 0.99997
               featureGates:
               - flowControl
               flowControl:
@@ -293,6 +286,7 @@ spec:
               apiVersion: inference.networking.x-k8s.io/v1alpha1
               kind: EndpointPickerConfig
               plugins:
+              - type: agent-identity
               - type: queue-scorer
               - type: kv-cache-utilization-scorer
               - type: prefix-cache-scorer
@@ -360,7 +354,7 @@ spec:
                 echo "=== Flushing model server ==="
                 kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=0
                 kubectl -n "$NS" rollout status deployment/"$MODEL_DEPLOY" --timeout=120s
-                kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=1
+                kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=2
 
                 for i in $(seq 1 30); do
                   if kubectl -n "$NS" rollout status deployment/"$MODEL_DEPLOY" --timeout=60s 2>/dev/null; then

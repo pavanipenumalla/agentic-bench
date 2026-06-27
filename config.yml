@@ -1,7 +1,7 @@
 api:
   type: chat
   streaming: true
-  session_id_header_key: "x-gateway-inference-fairness-id"
+  session_id_header_key: "x-claude-code-session-id"
 
 data:
   type: otel_trace_replay
@@ -17,22 +17,17 @@ load:
   type: trace_session_replay
   base_seed: 42
   num_workers: 8
+  request_timeout: 900
   stages:
-    - concurrent_sessions: 2
-      num_sessions: 2
-      session_rate: 2
-  worker_max_concurrency: 200
+    - concurrent_sessions: 600
+      num_sessions: 1000
+      session_rate: 10
+  worker_max_concurrency: 12000
 
 server:
   type: vllm
   model_name: Qwen/Qwen3.6-35B-A3B-FP8
   base_url: http://GUIDE_NAME-epp.NAMESPACE.svc.cluster.local
-
-# metrics:
-#   type: prometheus
-#   prometheus:
-#     url: https://thanos-querier.openshift-monitoring.svc:9091
-#     scrape_interval: 15
 
 storage:
   local_storage:
