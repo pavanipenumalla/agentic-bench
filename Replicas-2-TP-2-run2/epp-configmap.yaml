@@ -1,0 +1,63 @@
+apiVersion: v1
+data:
+  default-plugins.yaml: |
+    apiVersion: inference.networking.x-k8s.io/v1alpha1
+    kind: EndpointPickerConfig
+    plugins:
+    - type: queue-scorer
+    - type: kv-cache-utilization-scorer
+    - type: prefix-cache-scorer
+    - type: metrics-data-source
+      parameters:
+        scheme: "http"
+        path: "/metrics"
+        insecureSkipVerify: true
+    - type: core-metrics-extractor
+    schedulingProfiles:
+    - name: default
+      plugins:
+      - pluginRef: queue-scorer
+        weight: 2
+      - pluginRef: kv-cache-utilization-scorer
+        weight: 2
+      - pluginRef: prefix-cache-scorer
+        weight: 3
+  experiment-plugins.yaml: |
+    apiVersion: inference.networking.x-k8s.io/v1alpha1
+    kind: EndpointPickerConfig
+    plugins:
+    - type: queue-scorer
+    - type: kv-cache-utilization-scorer
+    - type: prefix-cache-scorer
+    - type: program-aware-fairness
+      parameters:
+        strategy: "las"
+        lasWeightService: 0.8
+        lasWeightHeadWait: 0.2
+        lasDecayFactor: 0.99997
+    featureGates:
+    - flowControl
+    flowControl:
+      defaultPriorityBand:
+        fairnessPolicyRef: program-aware-fairness
+    schedulingProfiles:
+    - name: default
+      plugins:
+      - pluginRef: queue-scorer
+        weight: 2
+      - pluginRef: kv-cache-utilization-scorer
+        weight: 2
+      - pluginRef: prefix-cache-scorer
+        weight: 3
+kind: ConfigMap
+metadata:
+  annotations:
+    meta.helm.sh/release-name: agentic-serving
+    meta.helm.sh/release-namespace: llm-d-program-aware
+  creationTimestamp: "2026-06-24T07:54:59Z"
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  name: agentic-serving-epp
+  namespace: llm-d-program-aware
+  resourceVersion: "1274123382"
+  uid: 9a20d7a7-9e3c-4d4e-b663-80ed2e4f9d71

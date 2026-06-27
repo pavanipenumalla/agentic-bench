@@ -1,1 +1,6 @@
 .env
+
+# Large raw EPP metrics scrape time-series — exceed GitHub's file-size limit and
+# aren't needed (analyses use reports/*.json, not these).
+**/metrics/metrics.jsonl
+.venv/

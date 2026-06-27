@@ -1,0 +1,92 @@
+api:
+  type: chat
+  streaming: true
+  headers: null
+  slo_unit: null
+  slo_tpot_header: null
+  slo_ttft_header: null
+  response_format: null
+  session_id_header_key: x-gateway-inference-fairness-id
+data:
+  type: otel_trace_replay
+  path: null
+  input_distribution: null
+  output_distribution: null
+  shared_prefix: null
+  multimodal: null
+  trace: null
+  otel_trace_replay:
+    use_static_model: true
+    static_model_name: Qwen/Qwen3.6-35B-A3B-FP8
+    model_mapping: null
+    default_max_tokens: 200
+    inject_random_session_id: false
+    duplicate_sessions_target: null
+    max_wait_ms: 15000
+    include_errors: false
+    skip_invalid_files: true
+    trace_directory: null
+    trace_files: null
+    hf_dataset_path: Exgentic/agent-llm-traces
+  conversation_replay: null
+load:
+  type: trace_session_replay
+  interval: 1.0
+  stages:
+  - concurrent_sessions: 600
+    session_rate: 10.0
+    num_sessions: 1000
+    timeout: null
+  sweep: null
+  num_workers: 8
+  worker_max_concurrency: 12000
+  worker_max_tcp_connections: 2500
+  trace: null
+  circuit_breakers: []
+  request_timeout: 900.0
+  lora_traffic_split: null
+  base_seed: 42
+metrics: null
+report:
+  request_lifecycle:
+    summary: true
+    per_stage: false
+    per_request: false
+    per_adapter: true
+    per_adapter_stage: false
+    percentiles:
+    - 0.1
+    - 1.0
+    - 5.0
+    - 10.0
+    - 25.0
+    - 50.0
+    - 75.0
+    - 90.0
+    - 95.0
+    - 99.0
+    - 99.9
+  prometheus:
+    summary: true
+    per_stage: false
+  session_lifecycle:
+    summary: true
+    per_stage: true
+    per_session: true
+  goodput: null
+storage:
+  local_storage:
+    path: /data/reports
+    report_file_prefix: null
+  google_cloud_storage: null
+  simple_storage_service: null
+server:
+  type: vllm
+  model_name: Qwen/Qwen3.6-35B-A3B-FP8
+  base_url: http://agentic-serving-epp.llm-d-program-aware.svc.cluster.local
+  ignore_eos: true
+  api_key: null
+  cert_path: null
+  key_path: null
+tokenizer: null
+circuit_breakers: null

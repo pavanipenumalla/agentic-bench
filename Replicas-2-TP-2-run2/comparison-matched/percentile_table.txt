@@ -1,0 +1,14 @@
+(Succeeded sessions only)
+
+Category                           LAS                RR
+                          p50     p99      p50     p99
+----------------------------------------------------------
+2-7 reqs                599.4  2058.2   1043.4  2336.0
+7-11 reqs              1958.2  3745.3   2163.6  3749.9
+11-20 reqs             3364.8  5717.4   3734.4  6739.0
+20-92 reqs             7365.3 10808.9   7810.3 10754.5
+ALL                    2633.4 10460.4   2744.2 10492.1
+
+Success/Failure Summary:
+  LAS: 887/887 succeeded (0 failed)
+  RR: 887/887 succeeded (0 failed)
