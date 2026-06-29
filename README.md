@@ -244,65 +244,70 @@ No-Fairness shows none (flow control disabled).
 
 ## Results
 
-Reproduced across four runs (run4 uses the deployment-accurate `agent-identity` + Claude-session-id
-path; behavior is unchanged from earlier runs, confirming the header change is cosmetic to the result).
+Reproduced across five runs
 
 ### Session completion — the headline
 
 Fairness is about **completing sessions**, not raw token throughput.
 
-| Strategy | run1 | run2 | run3 | run4 | run5 (v0.9.0) |
-|---|---|---|---|---|---|
-| **LAS** | 89.7% | 90.8% | 89.5% | 89.9% | 88.8% |
-| **RR** | 89.4% | 89.9% | 89.9% | 89.9% | 90.2% |
-| **No-Fairness** | 44.7% | — | 42.2% | 42.0% | 44.5% |
-
-(run5 uses the released `ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0` image; runs 1–4 used the dev image — results are identical within noise, confirming the released image reproduces the behavior.)
-
 LAS and RR complete **~90%** of 1000 sessions; No-Fairness completes **~43%** — it lets a few heavy
-sessions monopolize the server and abandons the rest (their requests are cancelled when a
-predecessor times out).
+sessions monopolize the server and abandons the rest (their requests are cancelled when a predecessor times out).
 
-![Session failure rate by strategy](Replicas-2-TP-2-run1/comparison/session_failure_rate.png)
+![Session failure rate by strategy](Replicas-2-TP-2-run4/comparison/session_failure_rate.png)
 
-*run1 session failure rate — LAS 10.3%, RR 10.6%, No-Fairness 55.3%.*
+*run4 session failure rate — LAS 10.1%, RR 10.1%, No-Fairness 59.8%.*
 
 ### Program-duration CDFs by session size (LAS vs RR)
 
-Session-duration CDFs (succeeded sessions), split by request-count bucket. LAS (orange) sits left of
-RR through the body — i.e. lower session latency at the same completion. No-Fairness is omitted here:
-it completes too few sessions (and only the easy ones) for a meaningful duration CDF.
+Session-duration CDFs (succeeded sessions), split by request-count bucket, comparing LAS vs RR at
+**equal completion (899/899 sessions)**. LAS (orange) sits left of RR in every bucket — lower session
+latency for the same amount of completed work. (No-Fairness is excluded from these CDFs: it completes
+too few sessions, and only the easy ones, for a meaningful duration comparison.)
+
+**Headline — median session duration, LAS vs RR (run4):**
+
+| Session size | LAS p50 | RR p50 | LAS faster by |
+|---|---|---|---|
+| 2–7 reqs | 726 s | 1095 s | **34%** |
+| 7–12 reqs | 1730 s | 2176 s | **21%** |
+| 12–26 reqs | 3524 s | 4484 s | **21%** |
+| 26–151 reqs | 7898 s | 8630 s | 9% |
+| **All sizes** | **2432 s** | **2925 s** | **17%** |
+
+LAS wins in every bucket. The edge is largest for short/mid sessions — least-attained-service
+prioritizes sessions that have received less cumulative service — and is still ~9% even on the longest,
+compute-bound sessions, all at identical completion.
 
 | 2–7 requests | 7–12 requests |
 |:---:|:---:|
-| ![2-7 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_2-7_reqs.png) | ![7-12 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_7-12_reqs.png) |
+| ![2-7 reqs](Replicas-2-TP-2-run4/comparison/program_duration_cdf_2-7_reqs.png) | ![7-12 reqs](Replicas-2-TP-2-run4/comparison/program_duration_cdf_7-12_reqs.png) |
 | **12–26 requests** | **26–151 requests** |
-| ![12-26 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_12-26_reqs.png) | ![26-151 reqs](Replicas-2-TP-2-run1/comparison/program_duration_cdf_26-151_reqs.png) |
+| ![12-26 reqs](Replicas-2-TP-2-run4/comparison/program_duration_cdf_12-26_reqs.png) | ![26-151 reqs](Replicas-2-TP-2-run4/comparison/program_duration_cdf_26-151_reqs.png) |
 
-### Latency (run1, per-request, **succeeded requests only**)
+### Latency (run4, per-request, **succeeded requests only**)
 
 | Metric | LAS | RR | No-Fairness |
 |---|---|---|---|
-| TTFT p50 / p99 (s) | 178 / 597 | 188 / 595 | 7.9 / 778 |
-| ITL p50 / p99 (ms) | 21 / 311 | 17 / 268 | 32 / **1311** |
-| E2E p50 / p99 (s) | 220 / 613 | 233 / 562 | 126 / 696 |
-| requests counted | 18,230 | 17,883 | **12,615** |
+| TTFT p50 / p99 (s) | 145 / 530 | 229 / 618 | 190 / 645 |
+| ITL p50 / p99 (ms) | 21 / 293 | 18 / 293 | 180 / **1198** |
+| E2E p50 / p99 (s) | 175 / 552 | 237 / 583 | 101 / 599 |
+| requests counted | 18,466 | 17,899 | **11,685** |
 
 > ⚠️ **Read latency with completion %.** No-Fairness's *lower medians are survivorship bias* — it
-> only finished 12,615 of ~18,000 requests (the easy ones), so its "fast" numbers are measured on an
-> easier subset. Its honest cost shows in the **ITL p99 (1311 ms, ~4–5× LAS/RR)** and in completion.
+> only finished 11,685 of ~18,000 requests (the easy ones), so its "fast" numbers are measured on an
+> easier subset. Its honest cost shows in the **ITL p99 (1198 ms, ~4× LAS/RR)** and in completion.
 
-### Goodput & completion-normalized view (run1)
+### Goodput & completion-normalized view (run4)
 
 | Strategy | events completed / 20,523 | completion |
 |---|---|---|
-| LAS | 18,140 | **88.4%** |
-| RR | 17,821 | 86.8% |
-| No-Fairness | 12,613 | **61.5%** |
+| LAS | 18,419 | **89.7%** |
+| RR | 17,814 | 86.8% |
+| No-Fairness | 11,685 | **56.9%** |
 
 The fair way to compare latency is normalized over **all intended requests**: each strategy's CDF
 rises only to its completion ceiling, and the gap to 1.0 is abandoned work. See
-`plots/latency_comparison.py` → `*_cdf_allreqs.png` (No-Fairness plateaus at 0.61; LAS/RR reach ~0.88).
+`plots/latency_comparison.py` → `*_cdf_allreqs.png` (No-Fairness plateaus at ~0.57; LAS reaches ~0.90, RR ~0.87).
 
 ### Takeaways
 
