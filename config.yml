@@ -1,33 +1,42 @@
 api:
   type: chat
   streaming: true
-  session_id_header_key: "x-claude-code-session-id"
+  session_id_header_key: "x-gateway-inference-fairness-id"
 
 data:
   type: otel_trace_replay
   otel_trace_replay:
     hf_dataset_path: "Exgentic/agent-llm-traces"
     use_static_model: true
-    static_model_name: "Qwen/Qwen3.6-35B-A3B-FP8"
-    default_max_tokens: 200
+    static_model_name: "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8"
+    default_max_tokens: 25000
     include_errors: false
     skip_invalid_files: true
+    # filter: "lambda x: x['max_tokens'] <= 110000"
+    # filter: "lambda x: x['max_tokens'] <= 110000 and x['spans'].__len__() <= 10"
+    # filter: "lambda x: x['max_tokens'] <= 80000 and x['spans'].__len__() <= 10 and x['harness'] == 'claude_code'"
+    # filter: "lambda x: x['harness'] != 'claude_code'"
+    predecessor_wait_timeout: null
+    output_tokens_overestimation_factor: 0.4
+    max_sequence_length: 262144
+    bad_tool_call_handling: use_recorded
+    repair_truncated_tool_call_args: false
 
 load:
   type: trace_session_replay
   base_seed: 42
   num_workers: 8
-  request_timeout: 900
+  request_timeout: 1800
   stages:
-    - concurrent_sessions: 600
-      num_sessions: 1000
+    - concurrent_sessions: 200
+      num_sessions: 400
       session_rate: 10
   worker_max_concurrency: 12000
 
 server:
   type: vllm
-  model_name: Qwen/Qwen3.6-35B-A3B-FP8
-  base_url: http://GUIDE_NAME-epp.NAMESPACE.svc.cluster.local
+  model_name: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8
+  base_url: http://agentic-serving-llama-epp.dasari.svc.cluster.local
 
 storage:
   local_storage:

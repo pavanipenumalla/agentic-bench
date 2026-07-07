@@ -61,14 +61,23 @@ for strat in $STRATEGIES; do
 apiVersion: inference.networking.x-k8s.io/v1alpha1
 kind: EndpointPickerConfig
 plugins:
-- type: agent-identity
 - type: queue-scorer
 - type: kv-cache-utilization-scorer
 - type: prefix-cache-scorer
+- type: concurrency-detector
+  parameters:
+    maxConcurrency: 140
 - type: program-aware-fairness
+  parameters:
+    strategy: "las"
+    lasWeightService: 0.8
+    lasWeightHeadWait: 0.2
+    lasHalfLifeSeconds: 120
 featureGates:
 - flowControl
 flowControl:
+  saturationDetector:
+    pluginRef: concurrency-detector
   defaultPriorityBand:
     fairnessPolicyRef: program-aware-fairness
 schedulingProfiles:
@@ -86,14 +95,18 @@ YAML
 apiVersion: inference.networking.x-k8s.io/v1alpha1
 kind: EndpointPickerConfig
 plugins:
-- type: agent-identity
 - type: queue-scorer
 - type: kv-cache-utilization-scorer
 - type: prefix-cache-scorer
+- type: concurrency-detector
+  parameters:
+    maxConcurrency: 140
 - type: round-robin-fairness-policy
 featureGates:
 - flowControl
 flowControl:
+  saturationDetector:
+    pluginRef: concurrency-detector
   defaultPriorityBand:
     fairnessPolicyRef: round-robin-fairness-policy
 schedulingProfiles:
@@ -252,7 +265,7 @@ spec:
               SCRAPER_CONFIGMAP="__SCRAPER_CONFIGMAP__"
               EPP_METRICS_URL="__EPP_METRICS_URL__"
               EPP_CM="${GUIDE_NAME}-epp"
-              EPP_CM_KEY="experiment-plugins.yaml"
+              EPP_CM_KEY="agentic-serving-llama-plugins.yaml"
 
               STRATEGIES="__STRATEGIES__"
 
@@ -261,14 +274,23 @@ spec:
               apiVersion: inference.networking.x-k8s.io/v1alpha1
               kind: EndpointPickerConfig
               plugins:
-              - type: agent-identity
               - type: queue-scorer
               - type: kv-cache-utilization-scorer
               - type: prefix-cache-scorer
+              - type: concurrency-detector
+                parameters:
+                  maxConcurrency: 140
               - type: program-aware-fairness
+                parameters:
+                  strategy: "las"
+                  lasWeightService: 0.8
+                  lasWeightHeadWait: 0.2
+                  lasHalfLifeSeconds: 120
               featureGates:
               - flowControl
               flowControl:
+                saturationDetector:
+                  pluginRef: concurrency-detector
                 defaultPriorityBand:
                   fairnessPolicyRef: program-aware-fairness
               schedulingProfiles:
@@ -286,14 +308,18 @@ spec:
               apiVersion: inference.networking.x-k8s.io/v1alpha1
               kind: EndpointPickerConfig
               plugins:
-              - type: agent-identity
               - type: queue-scorer
               - type: kv-cache-utilization-scorer
               - type: prefix-cache-scorer
+              - type: concurrency-detector
+                parameters:
+                  maxConcurrency: 140
               - type: round-robin-fairness-policy
               featureGates:
               - flowControl
               flowControl:
+                saturationDetector:
+                  pluginRef: concurrency-detector
                 defaultPriorityBand:
                   fairnessPolicyRef: round-robin-fairness-policy
               schedulingProfiles:
@@ -354,7 +380,7 @@ spec:
                 echo "=== Flushing model server ==="
                 kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=0
                 kubectl -n "$NS" rollout status deployment/"$MODEL_DEPLOY" --timeout=120s
-                kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=2
+                kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=1
 
                 for i in $(seq 1 30); do
                   if kubectl -n "$NS" rollout status deployment/"$MODEL_DEPLOY" --timeout=60s 2>/dev/null; then
@@ -415,6 +441,8 @@ spec:
                         env:
                           - name: PYTHONUNBUFFERED
                             value: "1"
+                          - name: HF_HOME
+                            value: /tmp/hf-cache
                           - name: HF_TOKEN
                             valueFrom:
                               secretKeyRef:
