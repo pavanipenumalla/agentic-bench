@@ -10,21 +10,12 @@ across the v6 → v7 PR-707-split metric rename):
   Old prefix (v6 builds):  program_aware_*
   New prefix (v7 builds):  llm_d_router_epp_program_aware_*
 
-Per-program signals (any subset present is captured):
+Per-program signals captured:
   jains_fairness_index                  scalar
   avg_wait_time_milliseconds            per program_id  (back-compat:
                                           ewma_wait_time_milliseconds)
   attained_service_tokens               per program_id  (LAS only)
-  deficit_tokens                        per program_id  (DRR only, not on
-                                          program-aware-las branch)
-  service_rate_tokens_per_second        per program_id  (program-aware-plugin
-                                          only; dropped in PR 707 split LAS)
-  queue_score                           per program_id  (also dropped in PR 707)
-  requests_total                        per program_id  (dropped in PR 707)
-  dispatched_total                      per program_id  (dropped in PR 707)
-  input_tokens_total / output_tokens_total  per program_id  (dropped in PR 707)
-  throughput_tokens_per_second          per program_id  (dropped in PR 707)
-  pick_latency_microseconds             histogram (dropped in PR 707)
+  deficit_tokens                        per program_id  (DRR only)
 
 Per-flow framework metrics (always present when flow-control is enabled).
 Try BOTH prefixes:
@@ -65,10 +56,10 @@ from typing import Dict, Optional
 # emitted under "program_aware_*"; PR-707-split (v7+) renamed to
 # "llm_d_router_epp_program_aware_*". We always try both — whichever the
 # live EPP exposes wins (the other returns empty).
-PROGRAM_AWARE_PREFIXES = ("llm_d_router_epp_program_aware", "program_aware")
+PROGRAM_AWARE_PREFIXES = ("llm_d_epp_program_aware", "llm_d_router_epp_program_aware", "program_aware")
 
 # Subsystem prefixes for framework flow-control metrics.
-FLOW_CONTROL_PREFIXES = ("llm_d_router_epp_flow_control", "inference_extension_flow_control")
+FLOW_CONTROL_PREFIXES = ("llm_d_epp_flow_control", "llm_d_router_epp_flow_control", "inference_extension_flow_control")
 
 
 # ---------------------------------------------------------------------------
@@ -242,41 +233,48 @@ def collect_program_aware(metrics: Dict[str, float]) -> dict:
 
     attained_svc = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "attained_service_tokens", "by_label_program") or {}
     deficit = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "deficit_tokens", "by_label_program") or {}
-    queue_score = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "queue_score", "by_label_program") or {}
-    service_rate = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "service_rate_tokens_per_second", "by_label_program") or {}
-    throughput = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "throughput_tokens_per_second", "by_label_program") or {}
-    requests = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "requests_total", "by_label_program") or {}
-    dispatched = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "dispatched_total", "by_label_program") or {}
-    input_tokens = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "input_tokens_total", "by_label_program") or {}
-    output_tokens = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "output_tokens_total", "by_label_program") or {}
-    pick_latency = _try_prefixes(metrics, PROGRAM_AWARE_PREFIXES, "pick_latency_microseconds", "histogram")
 
-    all_ids = (set(avg_wait) | set(attained_svc) | set(deficit) | set(queue_score)
-               | set(service_rate) | set(throughput) | set(requests) | set(dispatched)
-               | set(input_tokens) | set(output_tokens))
+    all_ids = set(avg_wait) | set(attained_svc) | set(deficit)
 
     per_program = {
         pid: {
-            "avg_wait_ms":       avg_wait.get(pid),
-            "ewma_wait_ms":      avg_wait.get(pid),  # back-compat alias
-            "attained_service":  attained_svc.get(pid),
-            "deficit_tokens":    deficit.get(pid),
-            "queue_score":       queue_score.get(pid),
-            "service_rate_tps":  service_rate.get(pid),
-            "throughput_tps":    throughput.get(pid),
-            "requests":          requests.get(pid),
-            "dispatched":        dispatched.get(pid),
-            "input_tokens":      input_tokens.get(pid),
-            "output_tokens":     output_tokens.get(pid),
+            "avg_wait_ms":           avg_wait.get(pid),
+            "attained_service_tokens": attained_svc.get(pid),
+            "deficit_tokens":        deficit.get(pid),
         }
         for pid in sorted(all_ids)
     }
 
     return {
         "fairness_index": fairness_index,
-        "pick_latency":   pick_latency,
         "per_program":    per_program,
     }
+
+
+def collect_endpoint_pool(metrics: Dict[str, float]) -> dict:
+    """Build the inference-pool / endpoint metric block.
+
+    Values are means across all ready endpoints in the pool, computed by the
+    EPP datalayer logger from per-endpoint scraped metrics. The pool name is
+    carried in the 'name' label.
+    """
+    PREFIX = "llm_d_epp"
+    kv_cache    = extract_by_label(metrics, f"{PREFIX}_average_kv_cache_utilization", "name")
+    queue_size  = extract_by_label(metrics, f"{PREFIX}_average_queue_size",            "name")
+    running_req = extract_by_label(metrics, f"{PREFIX}_average_running_requests",      "name")
+    ready_ep    = extract_by_label(metrics, f"{PREFIX}_ready_endpoints",               "name")
+
+    all_pools = set(kv_cache) | set(queue_size) | set(running_req) | set(ready_ep)
+    per_pool = {
+        pool: {
+            "avg_kv_cache_utilization": kv_cache.get(pool),
+            "avg_queue_size":           queue_size.get(pool),
+            "avg_running_requests":     running_req.get(pool),
+            "ready_endpoints":          ready_ep.get(pool),
+        }
+        for pool in sorted(all_pools)
+    }
+    return {"per_pool": per_pool}
 
 
 def collect_flow_control(metrics: Dict[str, float]) -> dict:
@@ -312,6 +310,74 @@ def collect_flow_control(metrics: Dict[str, float]) -> dict:
     }
 
 
+def collect_request_metrics(metrics: Dict[str, float]) -> dict:
+    """Build per-fairness_id request signals from llm_d_epp_request_* metrics.
+
+    These are always present when the EPP is running, regardless of which
+    fairness plugin (LAS/DRR/RR/none) is loaded. Keyed by fairness_id label.
+    """
+    PREFIX = "llm_d_epp"
+    req_total   = extract_by_label(metrics, f"{PREFIX}_request_total",   "fairness_id")
+    req_running = extract_by_label(metrics, f"{PREFIX}_request_running", "fairness_id")
+
+    # All token/latency metrics are histograms — derive mean from sum/count.
+    def _sum_count_by_fid(metric_name):
+        result = {}
+        label_re = re.compile(r'fairness_id="([^"]+)"')
+        sum_re   = re.compile(rf'^{re.escape(metric_name)}_sum\{{')
+        count_re = re.compile(rf'^{re.escape(metric_name)}_count\{{')
+        for key, val in metrics.items():
+            fid_m = label_re.search(key)
+            if not fid_m:
+                continue
+            fid = fid_m.group(1)
+            if sum_re.match(key):
+                result.setdefault(fid, {})
+                result[fid]["sum"] = result[fid].get("sum", 0.0) + val
+            elif count_re.match(key):
+                result.setdefault(fid, {})
+                result[fid]["count"] = result[fid].get("count", 0.0) + val
+        return result
+
+    input_tok_sc  = _sum_count_by_fid(f"{PREFIX}_request_input_tokens")
+    output_tok_sc = _sum_count_by_fid(f"{PREFIX}_request_output_tokens")
+    duration_sc   = _sum_count_by_fid(f"{PREFIX}_request_duration_seconds")
+    ttft_sc       = _sum_count_by_fid(f"{PREFIX}_request_ttft_seconds")
+    ntpot_sc      = _sum_count_by_fid(f"{PREFIX}_request_ntpot_seconds")
+
+    # Scheduler e2e (no fairness_id label — cluster-level histogram)
+    sched_e2e = extract_histogram(metrics, f"{PREFIX}_scheduler_e2e_duration_seconds")
+
+    all_fids = (set(req_total) | set(req_running)
+                | set(input_tok_sc) | set(output_tok_sc)
+                | set(duration_sc) | set(ttft_sc) | set(ntpot_sc))
+
+    def _mean(sc, fid):
+        d = sc.get(fid)
+        if not d:
+            return None
+        c = d.get("count", 0)
+        return d["sum"] / c if c else None
+
+    per_fid = {
+        fid: {
+            "request_total":           req_total.get(fid),
+            "request_running":         req_running.get(fid),
+            "input_tokens":            _mean(input_tok_sc, fid),
+            "output_tokens":           _mean(output_tok_sc, fid),
+            "mean_duration_seconds":   _mean(duration_sc, fid),
+            "mean_ttft_seconds":       _mean(ttft_sc, fid),
+            "mean_ntpot_seconds":      _mean(ntpot_sc, fid),
+        }
+        for fid in sorted(all_fids)
+    }
+
+    return {
+        "per_fid":        per_fid,
+        "sched_e2e":      sched_e2e,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Single scrape
 # ---------------------------------------------------------------------------
@@ -328,13 +394,16 @@ def scrape_once(url: str) -> dict:
 
     pa = collect_program_aware(metrics)
     fc = collect_flow_control(metrics)
+    ep = collect_endpoint_pool(metrics)
+    rm = collect_request_metrics(metrics)
 
     return {
-        "ts":             ts,
-        "fairness_index": pa["fairness_index"],
-        "pick_latency":   pa["pick_latency"],
-        "per_program":    pa["per_program"],
-        "flow_control":   fc,
+        "ts":              ts,
+        "fairness_index":  pa["fairness_index"],
+        "per_program":     pa["per_program"],
+        "flow_control":    fc,
+        "endpoint_pool":   ep,
+        "request_metrics": rm,
     }
 
 
