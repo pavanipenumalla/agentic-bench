@@ -1,0 +1,1523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Metrics.jsonl Visualizer</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2/dist/chartjs-plugin-zoom.min.js"></script>
+<script>
+// Disable all Chart.js animations globally — animations make scrubbing/Play look jittery
+// because every step re-renders. Static charts feel snappy.
+window.addEventListener('DOMContentLoaded', () => {
+  if (window.Chart) {
+    Chart.defaults.animation = false;
+    Chart.defaults.animations.colors = false;
+    Chart.defaults.animations.x = false;
+    Chart.defaults.animations.y = false;
+    Chart.defaults.transitions.active.animation.duration = 0;
+    Chart.defaults.transitions.resize.animation.duration = 0;
+    Chart.defaults.transitions.show.animation.duration = 0;
+    Chart.defaults.transitions.hide.animation.duration = 0;
+  }
+});
+</script>
+<style>
+:root {
+  --bg: #f8f9fa; --bg-card: #ffffff; --text: #1a1a2e; --text-muted: #6c757d;
+  --border: #dee2e6; --accent: #4361ee; --accent-hover: #3a56d4;
+  --nav-bg: #ffffff; --nav-border: #e5e7eb;
+  --drop-border: #4361ee; --drop-bg: #f0f4ff;
+  --table-stripe: #f8f9fa; --table-hover: #e9ecef;
+  --pos: #22c55e; --warn: #f59e0b; --neg: #ef4444;
+}
+:root.dark {
+  --bg: #0f172a; --bg-card: #1e293b; --text: #e2e8f0; --text-muted: #94a3b8;
+  --border: #334155; --accent: #818cf8; --accent-hover: #a5b4fc;
+  --nav-bg: #1e293b; --nav-border: #334155;
+  --drop-border: #818cf8; --drop-bg: #1e1b4b;
+  --table-stripe: #1e293b; --table-hover: #334155;
+  --pos: #4ade80; --warn: #fbbf24; --neg: #f87171;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+  background: var(--bg); color: var(--text); min-height: 100vh;
+}
+.hidden { display: none !important; }
+
+/* Top bar */
+.top-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--nav-bg); border-bottom: 1px solid var(--nav-border);
+  padding: 0 1rem; height: 48px; position: sticky; top: 0; z-index: 100;
+}
+.top-bar h1 { font-size: 0.9rem; font-weight: 600; }
+.top-bar .file-name { font-size: 0.75rem; color: var(--text-muted); margin-left: 1rem; }
+.top-bar .controls { display: flex; gap: 0.5rem; align-items: center; }
+.top-bar button {
+  background: none; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--text); cursor: pointer; padding: 4px 10px; font-size: 0.75rem;
+}
+.top-bar button:hover { background: var(--table-hover); }
+
+/* Tabs */
+.tabs {
+  display: flex; gap: 0; background: var(--nav-bg);
+  border-bottom: 1px solid var(--nav-border);
+  padding: 0 1rem; position: sticky; top: 48px; z-index: 99;
+}
+.tab-btn {
+  background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-muted); cursor: pointer; padding: 0.6rem 1.2rem;
+  font-size: 0.8rem; font-weight: 500;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* File loader */
+#file-loader {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: calc(100vh - 49px); padding: 2rem;
+}
+#drop-zone {
+  border: 2px dashed var(--drop-border); border-radius: 12px;
+  background: var(--drop-bg); padding: 3rem 4rem; text-align: center;
+  cursor: pointer; transition: all 0.2s; max-width: 560px; width: 100%;
+}
+#drop-zone.dragover { border-color: var(--accent); opacity: 0.85; }
+#drop-zone h2 { font-size: 1.1rem; margin-bottom: 0.5rem; }
+#drop-zone p { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 1rem; }
+#drop-zone .small { font-size: 0.7rem; margin-top: 0.6rem; }
+#drop-zone input[type="file"] { display: none; }
+#drop-zone label {
+  display: inline-block; background: var(--accent); color: #fff; border-radius: 6px;
+  padding: 8px 20px; cursor: pointer; font-size: 0.8rem;
+}
+#drop-zone label:hover { background: var(--accent-hover); }
+#loading-indicator {
+  margin-top: 1.25rem; font-size: 0.85rem; color: var(--text-muted);
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+#loading-bar {
+  margin-top: 0.5rem; height: 6px; width: 320px; max-width: 90%;
+  background: var(--border); border-radius: 3px; overflow: hidden;
+}
+#loading-bar > div { height: 100%; width: 0%; background: var(--accent); transition: width 0.1s; }
+
+/* Views */
+.view { padding: 1rem; max-width: 1500px; margin: 0 auto; }
+.card {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1rem; margin-bottom: 1rem;
+}
+.card h3 { font-size: 0.85rem; margin-bottom: 0.75rem; color: var(--text-muted); }
+.stats-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1rem; }
+.stat-box {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 0.6rem 0.9rem; flex: 1; min-width: 140px;
+}
+.stat-box .label { font-size: 0.65rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.stat-box .value { font-size: 1.05rem; font-weight: 700; margin-top: 0.2rem; font-family: 'SF Mono', 'Fira Code', monospace; }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.chart-wrap { position: relative; height: 260px; }
+.chart-wrap-full { position: relative; height: 280px; }
+
+/* Step nav */
+.pick-nav {
+  display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem; flex-wrap: wrap;
+  position: sticky; top: 90px; z-index: 50; background: var(--bg);
+  padding: 0.5rem 0;
+}
+.pick-nav button {
+  background: var(--accent); color: #fff; border: none; border-radius: 4px;
+  padding: 6px 14px; cursor: pointer; font-size: 0.8rem;
+}
+.pick-nav button:hover { background: var(--accent-hover); }
+.pick-nav button:disabled { opacity: 0.4; cursor: not-allowed; }
+.pick-nav button.outline {
+  background: transparent; color: var(--accent); border: 1px solid var(--accent);
+}
+.pick-nav button.outline:hover { background: var(--accent); color: #fff; }
+.pick-nav input[type="number"] {
+  width: 90px; padding: 5px 8px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--bg-card); color: var(--text); font-size: 0.8rem;
+}
+.pick-nav input[type="range"] { flex: 1; min-width: 200px; }
+.pick-nav .pick-count { font-size: 0.75rem; color: var(--text-muted); }
+.nav-sep { color: var(--text-muted); font-size: 0.9rem; user-select: none; }
+
+/* Tables */
+.table-wrap { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.74rem; }
+th, td { padding: 0.4rem 0.55rem; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font-weight: 600; color: var(--text-muted); font-size: 0.68rem; text-transform: uppercase;
+  position: sticky; top: 0; background: var(--bg-card); cursor: pointer; user-select: none; }
+th:hover { color: var(--text); }
+th.sort-asc::after { content: ' ▲'; }
+th.sort-desc::after { content: ' ▼'; }
+tr:nth-child(even) { background: var(--table-stripe); }
+tr:hover { background: var(--table-hover); }
+td.mono { font-family: 'SF Mono', 'Fira Code', monospace; }
+.search-box {
+  margin-bottom: 0.5rem; padding: 6px 10px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--bg-card); color: var(--text);
+  font-size: 0.78rem; width: 220px;
+}
+
+/* Flow picker */
+.pid-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+  gap: 0.25rem; max-height: 240px; overflow-y: auto;
+  padding: 0.5rem; border: 1px solid var(--border); border-radius: 4px;
+}
+.pid-chip {
+  display: flex; align-items: center; gap: 0.3rem; font-size: 0.72rem;
+  cursor: pointer; padding: 2px 4px; border-radius: 3px;
+}
+.pid-chip:hover { background: var(--table-hover); }
+.pid-chip input { cursor: pointer; }
+.pid-chip .swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0;
+}
+.flow-controls { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; }
+.flow-controls button {
+  background: var(--bg-card); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 4px 10px; cursor: pointer; font-size: 0.72rem;
+}
+.flow-controls button:hover { background: var(--table-hover); }
+.flow-controls .metric-pick {
+  font-size: 0.78rem; padding: 4px 8px; border: 1px solid var(--border);
+  border-radius: 4px; background: var(--bg-card); color: var(--text);
+}
+
+@media (max-width: 900px) {
+  .chart-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="top-bar">
+  <h1>Metrics Visualizer</h1>
+  <span class="file-name" id="file-name"></span>
+  <div class="controls" style="margin-left:auto">
+    <button id="btn-reset" class="hidden" onclick="resetAll()">Load Another File</button>
+    <button onclick="toggleTheme()">Theme</button>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="tabs hidden" id="tab-bar">
+  <button class="tab-btn active" data-tab="step">Step</button>
+  <button class="tab-btn" data-tab="timeline">Timeline</button>
+  <button class="tab-btn" data-tab="flows">Flows</button>
+  <button class="tab-btn" data-tab="pool">Pool</button>
+</div>
+
+<!-- File Loader -->
+<div id="file-loader">
+  <div id="drop-zone">
+    <h2>Load metrics.jsonl</h2>
+    <p>Drag &amp; drop a metrics.jsonl (or .compact.json) file, or click to browse</p>
+    <label for="file-input">Choose File</label>
+    <input type="file" id="file-input" accept=".jsonl,.json,.txt">
+    <p class="small">~870 MB raw .jsonl files take 30–60 s to parse. Compact files load in &lt;2 s.</p>
+  </div>
+  <div id="loading-indicator" class="hidden">Parsing…</div>
+  <div id="loading-bar" class="hidden"><div></div></div>
+</div>
+
+<!-- Step view -->
+<div id="view-step" class="view hidden">
+  <div class="pick-nav">
+    <button id="btn-prev" onclick="navStep(-1)">◀ Prev</button>
+    <button id="btn-play" onclick="togglePlay()">▶ Play</button>
+    <button id="btn-next" onclick="navStep(1)">Next ▶</button>
+    <input type="number" id="step-input" min="0" value="0" onchange="goToStep(parseInt(this.value))">
+    <input type="range" id="step-slider" min="0" value="0" oninput="goToStep(parseInt(this.value))">
+    <span class="nav-sep">|</span>
+    <button class="outline" onclick="navStep(-10)">−10</button>
+    <button class="outline" onclick="navStep(10)">+10</button>
+    <button class="outline" onclick="navStep(-100)">−100</button>
+    <button class="outline" onclick="navStep(100)">+100</button>
+    <span class="pick-count" id="step-count"></span>
+  </div>
+  <div class="stats-row" id="stats-row"></div>
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Dispatch cycle latency (this step, cumulative bucket counts)</h3>
+      <div class="chart-wrap"><canvas id="chart-step-dispatch"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Pool saturation history (±200 steps around current)</h3>
+      <div class="chart-wrap"><canvas id="chart-step-pool"></canvas></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Per-program rows at this step
+      <span style="font-weight:400;color:var(--text-muted);font-size:0.72rem">
+        — <code>attained_service</code> is the LAS strategy's time-decayed weighted-tokens metric. It only decays visibly in runs where (a) <code>lasHalfLifeSeconds&gt;0</code> AND (b) the scheduler pushes the decayed value to the gauge between completions. The Flows tab shows lifetime increase / decrease counts per program.
+      </span>
+    </h3>
+    <input type="text" class="search-box" id="prog-search" placeholder="Filter pids… (e.g. 10 or 205)" oninput="renderProgramTable()">
+    <div class="table-wrap" id="program-table-wrap"></div>
+  </div>
+</div>
+
+<!-- Timeline view -->
+<div id="view-timeline" class="view hidden">
+  <div class="card">
+    <h3>Fairness index over time (click to seek Step view)</h3>
+    <div class="chart-wrap-full"><canvas id="chart-tl-fair"></canvas></div>
+  </div>
+  <div class="card">
+    <h3>Programs over time
+      <span style="font-weight:400;color:var(--text-muted);font-size:0.72rem">
+        — <em>started</em> = first attained_service report; <em>completed</em> = step after the last increase in attained_service; <em>active</em> = started − completed
+      </span>
+    </h3>
+    <div class="chart-wrap-full"><canvas id="chart-tl-programs"></canvas></div>
+  </div>
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Pool saturation over time</h3>
+      <div class="chart-wrap"><canvas id="chart-tl-pool"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Dispatch cycle p50 / p99 (s)</h3>
+      <div class="chart-wrap"><canvas id="chart-tl-dispatch"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Request queue p50 / p99 (s)</h3>
+      <div class="chart-wrap"><canvas id="chart-tl-reqq"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Flows view -->
+<div id="view-flows" class="view hidden">
+  <div class="stats-row" id="flow-counter">
+    <div class="stat-box"><div class="label">Total pids</div><div class="value" id="fc-total">–</div></div>
+    <div class="stat-box"><div class="label">Started by step</div><div class="value" id="fc-started">–</div></div>
+    <div class="stat-box"><div class="label">Active at step</div><div class="value" id="fc-active">–</div></div>
+    <div class="stat-box"><div class="label">Completed by step</div><div class="value" id="fc-completed">–</div></div>
+    <div class="stat-box"><div class="label">Cur step</div><div class="value" id="fc-step">–</div></div>
+  </div>
+  <div class="card">
+    <h3>Pick programs to overlay</h3>
+    <div class="flow-controls">
+      <input type="text" class="search-box" id="pid-search" placeholder="Filter pids…" oninput="renderPidGrid()">
+      <button onclick="selectTopPids(8)">Top 8 by attained service</button>
+      <button onclick="selectTopPids(16)">Top 16</button>
+      <button onclick="clearPids()">Clear</button>
+      <span style="font-size:0.75rem;color:var(--text-muted)" id="pid-selected-count"></span>
+    </div>
+    <div class="pid-grid" id="pid-grid"></div>
+  </div>
+  <div class="card hidden" id="flow-lifecycle-card">
+    <h3>Selected programs — lifecycle
+      <span style="font-weight:400;color:var(--text-muted);font-size:0.72rem">
+        — start = first attained_service report; stop = last step where (att.svc changed in either direction) OR (inflight&gt;0). Includes visible decay events as activity, since decay confirms the gauge is still being written by the scheduler.
+      </span>
+    </h3>
+    <div class="table-wrap"><table id="flow-lifecycle-table">
+      <thead><tr>
+        <th>pid</th>
+        <th>start step</th><th>start (rel s)</th>
+        <th>stop step</th><th>stop (rel s)</th>
+        <th>last inflight&gt;0</th>
+        <th>last att++ step</th>
+        <th>last decay step</th>
+        <th>last queue Δ step</th>
+        <th># inc</th><th># dec</th>
+        <th>duration (steps)</th><th>duration (s)</th>
+        <th>peak att.svc</th><th>final att.svc</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>Attained service over time <span style="font-weight:400;color:var(--text-muted);font-size:0.72rem">— LAS only; empty when fairness plugin not loaded</span></h3>
+    <div class="chart-wrap-full"><canvas id="chart-flow-service"></canvas></div>
+  </div>
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Running requests over time</h3>
+      <div class="chart-wrap"><canvas id="chart-flow-running"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Request total (cumulative) over time</h3>
+      <div class="chart-wrap"><canvas id="chart-flow-total"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Mean request duration (s) over time</h3>
+      <div class="chart-wrap"><canvas id="chart-flow-duration"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Mean TTFT (s) over time</h3>
+      <div class="chart-wrap"><canvas id="chart-flow-ttft"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Avg wait (ms) over time <span style="font-weight:400;color:var(--text-muted);font-size:0.72rem">— fairness plugin only</span></h3>
+      <div class="chart-wrap"><canvas id="chart-flow-wait"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Deficit tokens over time <span style="font-weight:400;color:var(--text-muted);font-size:0.72rem">— DRR only</span></h3>
+      <div class="chart-wrap"><canvas id="chart-flow-deficit"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Queue bytes over time <span style="font-weight:400;color:var(--text-muted);font-size:0.72rem">— flow-control plugin only</span></h3>
+      <div class="chart-wrap"><canvas id="chart-flow-qbytes"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Pool view -->
+<div id="view-pool" class="view hidden">
+  <div class="stats-row" id="pool-stats-row"></div>
+  <div class="chart-grid">
+    <div class="card">
+      <h3>Avg KV cache utilization over time</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-kv"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Avg queue size (model-server waiting) over time</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-queue"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Avg running requests over time</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-running"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Ready endpoints over time</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-ready"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Prefix cache hit ratio over time (per plugin)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-hitratio"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Prefix cache hit bytes, mean over time (per plugin)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-hitbytes"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Cached prompt tokens, mean over time (per fairness_id)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-cachedtok"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ========================================================================
+// State
+// ========================================================================
+const STATE = {
+  N: 0,
+  ts: null,            // Float64Array
+  fairness: null,      // Float32Array
+  pool: null,          // Float32Array (single pool — first pool key, flow_control pool_saturation)
+  poolKey: '',
+  dispP50: null, dispP99: null,
+  reqqP50: null, reqqP99: null,
+  dispBuckets: null,   // Float32Array(N * BUCKETS.length) — cumulative counts
+  // endpoint_pool per-pool time series (keyed by pool name)
+  epPoolKeys: [],      // sorted pool name strings
+  epKvCache: {},       // poolName -> Float32Array(N)
+  epQueueSize: {},
+  epRunningReq: {},
+  epReadyEp: {},
+  // cache_metrics series — raw histogram sum/count per step (mean = sum/count)
+  cachePlugins: [],    // sorted plugin_name strings
+  cacheHitRatioSum: {}, cacheHitRatioCount: {},   // plugin -> Float32Array(N)
+  cacheHitBytesSum: {}, cacheHitBytesCount: {},   // plugin -> Float32Array(N)
+  cacheFids: [],       // sorted fairness_id strings
+  cacheTokSum: {}, cacheTokCount: {},             // fid -> Float32Array(N)
+  pids: [],            // sorted pid strings
+  pidIdx: {},          // pid -> column index
+  pidData: {},         // metric name -> Float32Array(N * pids.length) flat
+  // Program lifecycle, derived from attained_service per pid:
+  firstSeen: null, lastActive: null,
+  started: null, active: null, completed: null,
+  selectedPids: new Set(),
+  step: 0,
+  playing: false,
+  playTimer: null,
+  charts: {},
+  sort: { key: 'pid', dir: 'asc' },
+  flowMetric: 'attained_service_tokens',
+  fileName: '',
+};
+
+// Histogram bucket upper bounds (Prometheus convention; appears in dispatch_cycle_seconds.buckets)
+const DISP_BUCKETS = [0.0001, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, Infinity];
+const DISP_BUCKET_KEYS = ['0.0001','0.0002','0.0005','0.001','0.002','0.005','0.01','0.02','0.05','0.1','+Inf'];
+// request_queue_seconds buckets (broader range)
+const REQQ_BUCKETS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30, Infinity];
+
+// Per-program metrics (program-aware plugin — only present when LAS/DRR is loaded)
+const PP_METRICS = ['attained_service_tokens', 'avg_wait_ms', 'deficit_tokens', 'inflight'];
+// Per-flow framework metrics (flow-control plugin)
+const PF_METRICS = ['queue_size', 'queue_bytes'];
+// Per-fairness_id request metrics (always present from llm_d_epp_request_*)
+const RM_METRICS = ['request_total', 'request_running', 'input_tokens', 'output_tokens',
+                    'mean_duration_seconds', 'mean_ttft_seconds', 'mean_ntpot_seconds'];
+const ALL_METRICS = [...PP_METRICS, ...PF_METRICS, ...RM_METRICS];
+
+const TAB20 = [
+  '#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f',
+  '#bcbd22','#17becf','#aec7e8','#ffbb78','#98df8a','#ff9896','#c5b0d5','#c49c94',
+  '#f7b6d2','#c7c7c7','#dbdb8d','#9edae5'
+];
+
+// ========================================================================
+// Theme
+// ========================================================================
+function toggleTheme() {
+  document.documentElement.classList.toggle('dark');
+  localStorage.setItem('mviz-dark', document.documentElement.classList.contains('dark'));
+  rebuildAllCharts();
+}
+(function initTheme() {
+  if (localStorage.getItem('mviz-dark') === 'true') document.documentElement.classList.add('dark');
+})();
+function isDark() { return document.documentElement.classList.contains('dark'); }
+function chartColors() {
+  const dark = isDark();
+  return {
+    grid: dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+    text: dark ? '#cbd5e1' : '#475569',
+  };
+}
+
+// ========================================================================
+// File loading
+// ========================================================================
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('dragover');
+  if (e.dataTransfer.files.length) loadFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', () => { if (fileInput.files.length) loadFile(fileInput.files[0]); });
+
+async function loadFile(file) {
+  STATE.fileName = file.name;
+  document.getElementById('file-name').textContent = file.name + ' (' + fmtBytes(file.size) + ')';
+  const indicator = document.getElementById('loading-indicator');
+  const bar = document.getElementById('loading-bar');
+  const barFill = bar.querySelector('div');
+  indicator.classList.remove('hidden');
+  bar.classList.remove('hidden');
+  indicator.textContent = 'Reading…';
+
+  try {
+    // Sniff first byte to decide raw .jsonl vs compact .json
+    const head = await file.slice(0, 64).text();
+    const trimmed = head.trimStart();
+    if (trimmed.startsWith('{') && trimmed.includes('"format"') && trimmed.includes('metrics-v1')) {
+      indicator.textContent = 'Loading compact file…';
+      const text = await file.text();
+      const obj = JSON.parse(text);
+      ingestCompact(obj);
+    } else {
+      await streamParseJsonl(file, (parsed, totalLines, bytesRead, fileSize) => {
+        const pct = fileSize ? Math.min(100, (bytesRead / fileSize) * 100) : 0;
+        barFill.style.width = pct.toFixed(1) + '%';
+        indicator.textContent = `Parsing… ${parsed.toLocaleString()} records  (${fmtBytes(bytesRead)} / ${fmtBytes(fileSize)})`;
+      });
+    }
+    finalizeLoad();
+    indicator.classList.add('hidden');
+    bar.classList.add('hidden');
+    document.getElementById('file-loader').classList.add('hidden');
+    document.getElementById('tab-bar').classList.remove('hidden');
+    document.getElementById('btn-reset').classList.remove('hidden');
+    switchTab('step');
+  } catch (err) {
+    indicator.textContent = 'Error: ' + err.message;
+    bar.classList.add('hidden');
+    console.error(err);
+  }
+}
+
+async function streamParseJsonl(file, onProgress) {
+  const reader = file.stream().getReader();
+  const decoder = new TextDecoder('utf-8');
+  let leftover = '';
+  let bytesRead = 0;
+  const fileSize = file.size;
+
+  // Growing storage during parse
+  const tsArr = [];
+  const fairArr = [];
+  const poolArr = [];
+  const dispP50Arr = [];
+  const dispP99Arr = [];
+  const reqqP50Arr = [];
+  const reqqP99Arr = [];
+  const dispBucketsArr = [];
+
+  // endpoint_pool growing storage: poolName -> {kv: [], qs: [], rr: [], re: []}
+  const epStore = new Map();
+
+  // cache_metrics growing storage:
+  //   plugin_name -> {rsum: [], rcount: [], bsum: [], bcount: []}  (hit ratio + bytes)
+  //   fairness_id -> {tsum: [], tcount: []}                        (cached tokens)
+  const cachePluginStore = new Map();
+  const cacheFidStore = new Map();
+
+  // pid -> {metric -> [values...]}
+  const pidStore = new Map();
+
+  let poolKey = '';
+  let nLines = 0;
+  let lastUpdate = performance.now();
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    bytesRead += value.byteLength;
+    const chunk = decoder.decode(value, { stream: true });
+    const combined = leftover + chunk;
+    const lines = combined.split('\n');
+    leftover = lines.pop();
+    for (const line of lines) {
+      if (!line) continue;
+      let obj;
+      try { obj = JSON.parse(line); } catch { continue; }
+      const idx = nLines++;
+      tsArr.push(obj.ts);
+      fairArr.push(obj.fairness_index ?? NaN);
+
+      const fc = obj.flow_control || {};
+      const ps = fc.pool_saturation || {};
+      if (!poolKey) {
+        const k = Object.keys(ps)[0];
+        if (k) poolKey = k;
+      }
+      poolArr.push(poolKey ? (ps[poolKey] ?? NaN) : NaN);
+
+      // Dispatch histogram
+      const dh = fc.dispatch_cycle_seconds && fc.dispatch_cycle_seconds.buckets;
+      const buckArr = new Float32Array(DISP_BUCKET_KEYS.length);
+      let dispP50 = NaN, dispP99 = NaN;
+      if (dh) {
+        for (let i = 0; i < DISP_BUCKET_KEYS.length; i++) buckArr[i] = dh[DISP_BUCKET_KEYS[i]] ?? 0;
+        const prev = dispBucketsArr.length ? dispBucketsArr[dispBucketsArr.length - 1] : null;
+        const incr = new Float32Array(buckArr.length);
+        for (let i = 0; i < buckArr.length; i++) incr[i] = prev ? Math.max(0, buckArr[i] - prev[i]) : buckArr[i];
+        const total = incr.reduce((a,b) => a+b, 0);
+        if (total > 0) {
+          let cum = 0;
+          for (let i = 0; i < incr.length; i++) {
+            cum += incr[i];
+            if (Number.isNaN(dispP50) && cum >= total * 0.5) dispP50 = DISP_BUCKETS[i] === Infinity ? DISP_BUCKETS[i-1] : DISP_BUCKETS[i];
+            if (cum >= total * 0.99) { dispP99 = DISP_BUCKETS[i] === Infinity ? DISP_BUCKETS[i-1] : DISP_BUCKETS[i]; break; }
+          }
+        }
+      }
+      dispBucketsArr.push(buckArr);
+      dispP50Arr.push(dispP50);
+      dispP99Arr.push(dispP99);
+
+      // Request queue histogram
+      const rq = fc.request_queue_seconds && fc.request_queue_seconds.buckets;
+      let rP50 = NaN, rP99 = NaN;
+      if (rq) {
+        const cur = REQQ_BUCKETS.map((_, i) => rq[Object.keys(rq)[i]] ?? 0);
+        const total = cur.reduce((a,b) => a+b, 0);
+        if (total > 0) {
+          let cum = 0;
+          for (let i = 0; i < cur.length; i++) {
+            cum += cur[i];
+            if (Number.isNaN(rP50) && cum >= total * 0.5) rP50 = REQQ_BUCKETS[i] === Infinity ? REQQ_BUCKETS[i-1] : REQQ_BUCKETS[i];
+            if (cum >= total * 0.99) { rP99 = REQQ_BUCKETS[i] === Infinity ? REQQ_BUCKETS[i-1] : REQQ_BUCKETS[i]; break; }
+          }
+        }
+      }
+      reqqP50Arr.push(rP50);
+      reqqP99Arr.push(rP99);
+
+      // endpoint_pool per-pool signals
+      const ep = obj.endpoint_pool || {};
+      const pp_ep = ep.per_pool || {};
+      for (const [pname, pv] of Object.entries(pp_ep)) {
+        let e = epStore.get(pname);
+        if (!e) {
+          e = { kv: new Array(idx).fill(NaN), qs: new Array(idx).fill(NaN), rr: new Array(idx).fill(NaN), re: new Array(idx).fill(NaN) };
+          epStore.set(pname, e);
+        }
+        e.kv.push(pv.avg_kv_cache_utilization ?? NaN);
+        e.qs.push(pv.avg_queue_size ?? NaN);
+        e.rr.push(pv.avg_running_requests ?? NaN);
+        e.re.push(pv.ready_endpoints ?? NaN);
+      }
+      // Pad pools not present this step
+      for (const [pname, e] of epStore) {
+        if (!(pname in pp_ep)) {
+          e.kv.push(NaN); e.qs.push(NaN); e.rr.push(NaN); e.re.push(NaN);
+        }
+      }
+
+      // cache_metrics: prefix hit ratio/bytes per plugin, cached tokens per fid
+      const cm = obj.cache_metrics || {};
+      const hr = cm.prefix_hit_ratio || {};
+      const hb = cm.prefix_hit_bytes || {};
+      const ct = cm.cached_tokens || {};
+      const cachePlugNames = new Set([...Object.keys(hr), ...Object.keys(hb)]);
+      for (const pl of cachePlugNames) {
+        let e = cachePluginStore.get(pl);
+        if (!e) {
+          e = { rsum: new Array(idx).fill(NaN), rcount: new Array(idx).fill(NaN),
+                bsum: new Array(idx).fill(NaN), bcount: new Array(idx).fill(NaN) };
+          cachePluginStore.set(pl, e);
+        }
+        e.rsum.push(hr[pl]?.sum ?? NaN);   e.rcount.push(hr[pl]?.count ?? NaN);
+        e.bsum.push(hb[pl]?.sum ?? NaN);   e.bcount.push(hb[pl]?.count ?? NaN);
+      }
+      for (const [pl, e] of cachePluginStore) {
+        if (!cachePlugNames.has(pl)) { e.rsum.push(NaN); e.rcount.push(NaN); e.bsum.push(NaN); e.bcount.push(NaN); }
+      }
+      for (const fid of Object.keys(ct)) {
+        let e = cacheFidStore.get(fid);
+        if (!e) { e = { tsum: new Array(idx).fill(NaN), tcount: new Array(idx).fill(NaN) }; cacheFidStore.set(fid, e); }
+        e.tsum.push(ct[fid]?.sum ?? NaN); e.tcount.push(ct[fid]?.count ?? NaN);
+      }
+      for (const [fid, e] of cacheFidStore) {
+        if (!(fid in ct)) { e.tsum.push(NaN); e.tcount.push(NaN); }
+      }
+
+      // Per-program / per-flow / per-fairness_id
+      const pp = obj.per_program || {};
+      const pf = fc.per_flow || {};
+      const rm = (obj.request_metrics || {}).per_fid || {};
+      const seen = new Set([...Object.keys(pp), ...Object.keys(pf), ...Object.keys(rm)]);
+      for (const pid of seen) {
+        let entry = pidStore.get(pid);
+        if (!entry) {
+          entry = {};
+          for (const m of ALL_METRICS) {
+            entry[m] = new Array(idx).fill(NaN);
+          }
+          pidStore.set(pid, entry);
+        }
+        const ppr = pp[pid] || {};
+        const pfr = pf[pid] || {};
+        const rmr = rm[pid] || {};
+        for (const m of PP_METRICS) entry[m].push(ppr[m] == null ? NaN : ppr[m]);
+        for (const m of PF_METRICS) entry[m].push(pfr[m] == null ? NaN : pfr[m]);
+        for (const m of RM_METRICS) entry[m].push(rmr[m] == null ? NaN : rmr[m]);
+      }
+      for (const [pid, entry] of pidStore) {
+        if (!seen.has(pid)) {
+          for (const m of ALL_METRICS) entry[m].push(NaN);
+        }
+      }
+
+      const now = performance.now();
+      if (now - lastUpdate > 80) {
+        onProgress(nLines, nLines, bytesRead, fileSize);
+        lastUpdate = now;
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+  }
+  if (leftover.trim()) { try { JSON.parse(leftover); } catch {} }
+  onProgress(nLines, nLines, bytesRead, fileSize);
+
+  // Collapse to typed arrays
+  STATE.N = nLines;
+  STATE.ts = new Float64Array(tsArr);
+  STATE.fairness = Float32Array.from(fairArr);
+  STATE.pool = Float32Array.from(poolArr);
+  STATE.poolKey = poolKey;
+  STATE.dispP50 = Float32Array.from(dispP50Arr);
+  STATE.dispP99 = Float32Array.from(dispP99Arr);
+  STATE.reqqP50 = Float32Array.from(reqqP50Arr);
+  STATE.reqqP99 = Float32Array.from(reqqP99Arr);
+  const B = DISP_BUCKET_KEYS.length;
+  STATE.dispBuckets = new Float32Array(nLines * B);
+  for (let i = 0; i < nLines; i++) STATE.dispBuckets.set(dispBucketsArr[i], i * B);
+
+  // endpoint_pool typed arrays
+  STATE.epPoolKeys = Array.from(epStore.keys()).sort();
+  STATE.epKvCache = {}; STATE.epQueueSize = {}; STATE.epRunningReq = {}; STATE.epReadyEp = {};
+  for (const pname of STATE.epPoolKeys) {
+    const e = epStore.get(pname);
+    STATE.epKvCache[pname]   = Float32Array.from(e.kv);
+    STATE.epQueueSize[pname] = Float32Array.from(e.qs);
+    STATE.epRunningReq[pname]= Float32Array.from(e.rr);
+    STATE.epReadyEp[pname]   = Float32Array.from(e.re);
+  }
+
+  // cache_metrics typed arrays
+  STATE.cachePlugins = Array.from(cachePluginStore.keys()).sort();
+  STATE.cacheHitRatioSum = {}; STATE.cacheHitRatioCount = {};
+  STATE.cacheHitBytesSum = {}; STATE.cacheHitBytesCount = {};
+  for (const pl of STATE.cachePlugins) {
+    const e = cachePluginStore.get(pl);
+    STATE.cacheHitRatioSum[pl]   = Float32Array.from(e.rsum);
+    STATE.cacheHitRatioCount[pl] = Float32Array.from(e.rcount);
+    STATE.cacheHitBytesSum[pl]   = Float32Array.from(e.bsum);
+    STATE.cacheHitBytesCount[pl] = Float32Array.from(e.bcount);
+  }
+  STATE.cacheFids = Array.from(cacheFidStore.keys()).sort();
+  STATE.cacheTokSum = {}; STATE.cacheTokCount = {};
+  for (const fid of STATE.cacheFids) {
+    const e = cacheFidStore.get(fid);
+    STATE.cacheTokSum[fid]   = Float32Array.from(e.tsum);
+    STATE.cacheTokCount[fid] = Float32Array.from(e.tcount);
+  }
+
+  const pids = Array.from(pidStore.keys());
+  pids.sort((a, b) => {
+    const an = +a, bn = +b;
+    if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+    return a.localeCompare(b);
+  });
+  STATE.pids = pids;
+  STATE.pidIdx = {};
+  pids.forEach((pid, i) => STATE.pidIdx[pid] = i);
+  STATE.pidData = {};
+  for (const m of ALL_METRICS) {
+    const arr = new Float32Array(nLines * pids.length);
+    for (let pi = 0; pi < pids.length; pi++) {
+      const src = pidStore.get(pids[pi])[m];
+      for (let i = 0; i < nLines; i++) arr[i * pids.length + pi] = src[i] == null ? NaN : src[i];
+    }
+    STATE.pidData[m] = arr;
+  }
+}
+
+function ingestCompact(obj) {
+  STATE.N = obj.N;
+  STATE.ts = new Float64Array(obj.ts);
+  STATE.fairness = Float32Array.from(obj.fairness);
+  STATE.pool = Float32Array.from(obj.pool);
+  STATE.poolKey = obj.poolKey || '';
+  STATE.dispP50 = Float32Array.from(obj.dispP50);
+  STATE.dispP99 = Float32Array.from(obj.dispP99);
+  STATE.reqqP50 = Float32Array.from(obj.reqqP50);
+  STATE.reqqP99 = Float32Array.from(obj.reqqP99);
+  STATE.dispBuckets = Float32Array.from(obj.dispBuckets);
+  // endpoint_pool (compact files written before this feature have no ep* keys)
+  STATE.epPoolKeys = obj.epPoolKeys || [];
+  STATE.epKvCache = {}; STATE.epQueueSize = {}; STATE.epRunningReq = {}; STATE.epReadyEp = {};
+  for (const pname of STATE.epPoolKeys) {
+    STATE.epKvCache[pname]    = obj.epKvCache    && obj.epKvCache[pname]    ? Float32Array.from(obj.epKvCache[pname])    : new Float32Array(STATE.N).fill(NaN);
+    STATE.epQueueSize[pname]  = obj.epQueueSize  && obj.epQueueSize[pname]  ? Float32Array.from(obj.epQueueSize[pname])  : new Float32Array(STATE.N).fill(NaN);
+    STATE.epRunningReq[pname] = obj.epRunningReq && obj.epRunningReq[pname] ? Float32Array.from(obj.epRunningReq[pname]) : new Float32Array(STATE.N).fill(NaN);
+    STATE.epReadyEp[pname]    = obj.epReadyEp    && obj.epReadyEp[pname]    ? Float32Array.from(obj.epReadyEp[pname])    : new Float32Array(STATE.N).fill(NaN);
+  }
+  // cache_metrics (compact files written before this feature have no cache* keys)
+  const hydrateMap = (keys, src) => {
+    const out = {};
+    for (const k of keys) out[k] = src && src[k] ? Float32Array.from(src[k]) : new Float32Array(STATE.N).fill(NaN);
+    return out;
+  };
+  STATE.cachePlugins = obj.cachePlugins || [];
+  STATE.cacheHitRatioSum   = hydrateMap(STATE.cachePlugins, obj.cacheHitRatioSum);
+  STATE.cacheHitRatioCount = hydrateMap(STATE.cachePlugins, obj.cacheHitRatioCount);
+  STATE.cacheHitBytesSum   = hydrateMap(STATE.cachePlugins, obj.cacheHitBytesSum);
+  STATE.cacheHitBytesCount = hydrateMap(STATE.cachePlugins, obj.cacheHitBytesCount);
+  STATE.cacheFids = obj.cacheFids || [];
+  STATE.cacheTokSum   = hydrateMap(STATE.cacheFids, obj.cacheTokSum);
+  STATE.cacheTokCount = hydrateMap(STATE.cacheFids, obj.cacheTokCount);
+  STATE.pids = obj.pids;
+  STATE.pidIdx = {};
+  STATE.pids.forEach((pid, i) => STATE.pidIdx[pid] = i);
+  STATE.pidData = {};
+  for (const m of ALL_METRICS) {
+    if (obj.pidData && obj.pidData[m]) STATE.pidData[m] = Float32Array.from(obj.pidData[m]);
+    else STATE.pidData[m] = new Float32Array(STATE.N * STATE.pids.length).fill(NaN);
+  }
+}
+
+function finalizeLoad() {
+  STATE.step = 0;
+  document.getElementById('step-input').max = STATE.N - 1;
+  document.getElementById('step-slider').max = STATE.N - 1;
+  document.getElementById('step-count').textContent = `0 / ${STATE.N - 1}  (${STATE.pids.length} pids)`;
+  computeProgramLifecycle();
+  STATE.selectedPids = new Set();
+  selectTopPids(8);
+}
+
+function computeProgramLifecycle() {
+  const N = STATE.N, np = STATE.pids.length;
+  const att = STATE.pidData['attained_service_tokens'];
+  const inf = STATE.pidData['inflight'];
+  const qs  = STATE.pidData['queue_size'];
+  const firstSeen        = new Int32Array(np); firstSeen.fill(-1);
+  const lastActive       = new Int32Array(np); lastActive.fill(-1);
+  const lastAttIncStep   = new Int32Array(np); lastAttIncStep.fill(-1);
+  const lastInflightStep = new Int32Array(np); lastInflightStep.fill(-1);
+  const lastDecreaseStep = new Int32Array(np); lastDecreaseStep.fill(-1);
+  const lastQChgStep     = new Int32Array(np); lastQChgStep.fill(-1);
+  const nIncreases       = new Int32Array(np);
+  const nDecreases       = new Int32Array(np);
+  let haveInflight = false;
+  if (inf) for (let i = 0; i < inf.length; i++) { if (!Number.isNaN(inf[i])) { haveInflight = true; break; } }
+
+  for (let pi = 0; pi < np; pi++) {
+    let prev = NaN;
+    let prevQ = NaN;
+    for (let i = 0; i < N; i++) {
+      const v = att[i * np + pi];
+      const f = inf ? inf[i * np + pi] : NaN;
+      const q = qs ? qs[i * np + pi] : NaN;
+      let activeNow = false;
+      if (!Number.isNaN(v)) {
+        if (firstSeen[pi] < 0) firstSeen[pi] = i;
+        if (!Number.isNaN(prev)) {
+          if (v > prev) { lastAttIncStep[pi] = i; nIncreases[pi]++; activeNow = true; }
+          else if (v < prev) { lastDecreaseStep[pi] = i; nDecreases[pi]++; activeNow = true; }
+        }
+        prev = v;
+      }
+      if (!Number.isNaN(f) && f > 0) { lastInflightStep[pi] = i; activeNow = true; }
+      if (!Number.isNaN(q)) {
+        if (!Number.isNaN(prevQ) && q !== prevQ) lastQChgStep[pi] = i;
+        prevQ = q;
+      }
+      if (activeNow) lastActive[pi] = i;
+    }
+  }
+  STATE.firstSeen = firstSeen;
+  STATE.lastActive = lastActive;
+  STATE.lastAttIncStep = lastAttIncStep;
+  STATE.lastInflightStep = lastInflightStep;
+  STATE.lastDecreaseStep = lastDecreaseStep;
+  STATE.lastQChgStep = lastQChgStep;
+  STATE.nIncreases = nIncreases;
+  STATE.nDecreases = nDecreases;
+  STATE.haveInflight = haveInflight;
+  const starts = [...firstSeen].filter(x => x >= 0).sort((a,b) => a-b);
+  const ends   = [...lastActive].filter(x => x >= 0).sort((a,b) => a-b);
+  const started = new Int32Array(N);
+  const completed = new Int32Array(N);
+  const active = new Int32Array(N);
+  let si = 0, ei = 0;
+  for (let i = 0; i < N; i++) {
+    while (si < starts.length && starts[si] <= i) si++;
+    while (ei < ends.length && ends[ei] < i) ei++;
+    started[i] = si;
+    completed[i] = ei;
+    active[i] = si - ei;
+  }
+  STATE.started = started;
+  STATE.active = active;
+  STATE.completed = completed;
+}
+
+function fmtBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+  if (n < 1024*1024*1024) return (n/(1024*1024)).toFixed(1) + ' MB';
+  return (n/(1024*1024*1024)).toFixed(2) + ' GB';
+}
+function fmtNum(n, prec=3) {
+  if (n == null || Number.isNaN(n)) return '–';
+  if (typeof n !== 'number') return String(n);
+  if (n === 0) return '0';
+  const abs = Math.abs(n);
+  if (abs >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (abs >= 1) return n.toFixed(2);
+  return n.toPrecision(prec);
+}
+function fmtTs(t) {
+  const d = new Date(t * 1000);
+  return d.toISOString().replace('T', ' ').replace('Z', '').slice(0, 19);
+}
+
+// ========================================================================
+// Reset
+// ========================================================================
+function resetAll() {
+  for (const m of ALL_METRICS) STATE.pidData[m] = null;
+  STATE.ts = STATE.fairness = STATE.pool = null;
+  STATE.dispP50 = STATE.dispP99 = STATE.reqqP50 = STATE.reqqP99 = STATE.dispBuckets = null;
+  STATE.epPoolKeys = []; STATE.epKvCache = {}; STATE.epQueueSize = {}; STATE.epRunningReq = {}; STATE.epReadyEp = {};
+  STATE.cachePlugins = []; STATE.cacheHitRatioSum = {}; STATE.cacheHitRatioCount = {}; STATE.cacheHitBytesSum = {}; STATE.cacheHitBytesCount = {};
+  STATE.cacheFids = []; STATE.cacheTokSum = {}; STATE.cacheTokCount = {};
+  STATE.pids = []; STATE.N = 0;
+  for (const k in STATE.charts) { try { STATE.charts[k].destroy(); } catch {} STATE.charts[k] = null; }
+  document.getElementById('file-loader').classList.remove('hidden');
+  document.getElementById('tab-bar').classList.add('hidden');
+  document.getElementById('btn-reset').classList.add('hidden');
+  for (const t of ['step','timeline','flows','pool'])
+    document.getElementById('view-' + t).classList.add('hidden');
+  document.getElementById('file-name').textContent = '';
+  fileInput.value = '';
+}
+
+// ========================================================================
+// Tabs
+// ========================================================================
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  for (const t of ['step','timeline','flows','pool']) {
+    document.getElementById('view-' + t).classList.toggle('hidden', t !== name);
+  }
+  if (name === 'step') renderStepView();
+  if (name === 'timeline') renderTimelineView();
+  if (name === 'flows') { renderPidGrid(); renderFlowsView(); }
+  if (name === 'pool') renderPoolView();
+}
+
+// ========================================================================
+// Step navigation
+// ========================================================================
+function navStep(d) { goToStep(STATE.step + d); }
+function goToStep(i) {
+  if (!STATE.N) return;
+  i = Math.max(0, Math.min(STATE.N - 1, i|0));
+  STATE.step = i;
+  document.getElementById('step-input').value = i;
+  document.getElementById('step-slider').value = i;
+  document.getElementById('step-count').textContent = `${i} / ${STATE.N - 1}  (${STATE.pids.length} pids)`;
+  renderStepStats();
+  renderProgramTable();
+  renderStepCharts();
+  if (STATE.started) renderFlowCounter();
+}
+function togglePlay() {
+  STATE.playing = !STATE.playing;
+  document.getElementById('btn-play').textContent = STATE.playing ? '⏸ Pause' : '▶ Play';
+  if (STATE.playing) {
+    STATE.playTimer = setInterval(() => {
+      if (STATE.step >= STATE.N - 1) { togglePlay(); return; }
+      navStep(1);
+    }, 100);
+  } else {
+    clearInterval(STATE.playTimer);
+  }
+}
+window.addEventListener('keydown', e => {
+  if (!STATE.N) return;
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowLeft') { navStep(e.shiftKey ? -10 : -1); e.preventDefault(); }
+  if (e.key === 'ArrowRight') { navStep(e.shiftKey ? 10 : 1); e.preventDefault(); }
+  if (e.key === ' ') { togglePlay(); e.preventDefault(); }
+});
+
+// ========================================================================
+// Step view rendering
+// ========================================================================
+function renderStepView() {
+  renderStepStats();
+  renderProgramTable();
+  renderStepCharts();
+}
+
+function renderStepStats() {
+  const i = STATE.step;
+  const t0 = STATE.ts[0];
+  const t = STATE.ts[i];
+  let totalInflight = NaN, anyInflight = false;
+  if (STATE.haveInflight && STATE.pidData['inflight']) {
+    const inf = STATE.pidData['inflight'];
+    const np = STATE.pids.length;
+    totalInflight = 0;
+    for (let pi = 0; pi < np; pi++) {
+      const v = inf[i * np + pi];
+      if (!Number.isNaN(v)) { totalInflight += v; anyInflight = true; }
+    }
+  }
+  const stats = [
+    { label: 'TS (utc)', value: fmtTs(t) },
+    { label: 'TS (rel s)', value: (t - t0).toFixed(2) },
+    { label: 'Step', value: `${i} / ${STATE.N - 1}` },
+    { label: 'Fairness', value: fmtNum(STATE.fairness[i]) },
+    { label: 'Pool sat', value: fmtNum(STATE.pool[i]) },
+    { label: 'Disp p50', value: fmtNum(STATE.dispP50[i]) + 's' },
+    { label: 'Disp p99', value: fmtNum(STATE.dispP99[i]) + 's' },
+    { label: 'ReqQ p50', value: fmtNum(STATE.reqqP50[i]) + 's' },
+    { label: 'ReqQ p99', value: fmtNum(STATE.reqqP99[i]) + 's' },
+    ...(anyInflight ? [{ label: 'Σ inflight', value: fmtNum(totalInflight) }] : []),
+  ];
+  const row = document.getElementById('stats-row');
+  row.innerHTML = stats.map(s =>
+    `<div class="stat-box"><div class="label">${s.label}</div><div class="value">${s.value}</div></div>`
+  ).join('');
+}
+
+function renderProgramTable() {
+  const i = STATE.step;
+  const filter = (document.getElementById('prog-search').value || '').trim();
+  const npids = STATE.pids.length;
+  const rows = [];
+  for (let pi = 0; pi < npids; pi++) {
+    const pid = STATE.pids[pi];
+    if (filter && !pid.includes(filter)) continue;
+    const row = { pid };
+    for (const m of ALL_METRICS) row[m] = STATE.pidData[m][i * npids + pi];
+    rows.push(row);
+  }
+  const { key, dir } = STATE.sort;
+  const sign = dir === 'asc' ? 1 : -1;
+  rows.sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (key === 'pid') {
+      const an = +av, bn = +bv;
+      if (Number.isFinite(an) && Number.isFinite(bn)) return sign * (an - bn);
+      return sign * String(av).localeCompare(String(bv));
+    }
+    const an = Number.isNaN(av) ? -Infinity : av;
+    const bn = Number.isNaN(bv) ? -Infinity : bv;
+    return sign * (an - bn);
+  });
+  const cols = ['pid', ...ALL_METRICS];
+  let html = '<table><thead><tr>';
+  for (const c of cols) {
+    const cls = c === STATE.sort.key ? (STATE.sort.dir === 'asc' ? 'sort-asc' : 'sort-desc') : '';
+    html += `<th class="${cls}" onclick="sortTable('${c}')">${c}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+  for (const r of rows) {
+    html += '<tr>';
+    for (const c of cols) html += `<td class="mono">${c === 'pid' ? r.pid : fmtNum(r[c])}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('program-table-wrap').innerHTML = html;
+}
+
+function sortTable(key) {
+  if (STATE.sort.key === key) STATE.sort.dir = STATE.sort.dir === 'asc' ? 'desc' : 'asc';
+  else { STATE.sort.key = key; STATE.sort.dir = key === 'pid' ? 'asc' : 'desc'; }
+  renderProgramTable();
+}
+
+function ensureStepCharts() {
+  const c = chartColors();
+  if (!STATE.charts.stepDispatch) {
+    STATE.charts.stepDispatch = new Chart(document.getElementById('chart-step-dispatch'), {
+      type: 'bar',
+      data: { labels: DISP_BUCKET_KEYS, datasets: [{ label: 'Δ count this step', data: [], backgroundColor: '#4361ee' }] },
+      options: {
+        animation: false, responsive: true, maintainAspectRatio: false,
+        scales: { x: { ticks: { color: c.text }, grid: { color: c.grid } },
+                  y: { beginAtZero: true, ticks: { color: c.text }, grid: { color: c.grid } } },
+        plugins: { legend: { labels: { color: c.text } } },
+      },
+    });
+  }
+  if (!STATE.charts.stepPool) {
+    STATE.charts.stepPool = new Chart(document.getElementById('chart-step-pool'), {
+      type: 'line',
+      data: { labels: [], datasets: [
+        { label: STATE.poolKey || 'pool', data: [], borderColor: '#22c55e',
+          backgroundColor: 'rgba(34,197,94,0.15)', fill: true, pointRadius: 0, borderWidth: 1.5 },
+        { label: 'cursor', data: [], borderColor: '#ef4444', borderWidth: 1, pointRadius: 0, fill: false, borderDash: [4, 4] },
+      ]},
+      options: {
+        animation: false, responsive: true, maintainAspectRatio: false,
+        scales: { x: { ticks: { color: c.text, maxTicksLimit: 8 }, grid: { color: c.grid } },
+                  y: { ticks: { color: c.text }, grid: { color: c.grid } } },
+        plugins: { legend: { labels: { color: c.text } } },
+      },
+    });
+  }
+}
+
+function renderStepCharts() {
+  ensureStepCharts();
+  const i = STATE.step;
+  const B = DISP_BUCKET_KEYS.length;
+  const buckRow = STATE.dispBuckets.subarray(i * B, (i + 1) * B);
+  const prevRow = i > 0 ? STATE.dispBuckets.subarray((i - 1) * B, i * B) : null;
+  const incr = new Array(B);
+  for (let k = 0; k < B; k++) incr[k] = prevRow ? Math.max(0, buckRow[k] - prevRow[k]) : buckRow[k];
+  const ch1 = STATE.charts.stepDispatch;
+  ch1.data.datasets[0].data = incr;
+  ch1.update('none');
+
+  const W = 200;
+  const lo = Math.max(0, i - W);
+  const hi = Math.min(STATE.N - 1, i + W);
+  const labels = [], data = [], cursor = [];
+  for (let k = lo; k <= hi; k++) {
+    labels.push(k);
+    data.push(STATE.pool[k]);
+    cursor.push(k === i ? STATE.pool[k] : null);
+  }
+  const ch2 = STATE.charts.stepPool;
+  ch2.data.labels = labels;
+  ch2.data.datasets[0].data = data;
+  ch2.data.datasets[0].label = STATE.poolKey || 'pool';
+  ch2.data.datasets[1].data = cursor;
+  ch2.data.datasets[1].pointRadius = cursor.map(v => v == null ? 0 : 5);
+  ch2.update('none');
+}
+
+// ========================================================================
+// Timeline view
+// ========================================================================
+function downsample(arr, maxPoints = 2000) {
+  const N = arr.length;
+  if (N <= maxPoints) return { idx: Array.from({length: N}, (_, i) => i), val: Array.from(arr) };
+  const stride = Math.ceil(N / maxPoints);
+  const idx = [], val = [];
+  for (let i = 0; i < N; i += stride) { idx.push(i); val.push(arr[i]); }
+  return { idx, val };
+}
+
+function makeClickSeek(chart) {
+  chart.canvas.addEventListener('click', evt => {
+    const rect = chart.canvas.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    const xs = chart.scales.x;
+    const pixelMin = xs.getPixelForValue(xs.min);
+    const pixelMax = xs.getPixelForValue(xs.max);
+    const frac = (x - pixelMin) / (pixelMax - pixelMin);
+    const idx = Math.round(xs.min + frac * (xs.max - xs.min));
+    goToStep(idx);
+    switchTab('step');
+  });
+}
+
+function renderTimelineView() {
+  const c = chartColors();
+  const lineOpts = (color, label) => ({
+    borderColor: color, backgroundColor: color + '22', label,
+    pointRadius: 0, borderWidth: 1.5, fill: false,
+  });
+  const baseOpts = () => ({
+    responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+    scales: {
+      x: { type: 'linear', ticks: { color: c.text, maxTicksLimit: 10 }, grid: { color: c.grid }, title: { display: true, text: 'step', color: c.text } },
+      y: { ticks: { color: c.text }, grid: { color: c.grid } },
+    },
+    plugins: {
+      legend: { labels: { color: c.text } },
+      zoom: { zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' }, pan: { enabled: true, mode: 'x' } },
+    },
+  });
+  const ds = (arr, color, label) => {
+    const d = downsample(arr);
+    return { ...lineOpts(color, label), data: d.idx.map((i, k) => ({ x: i, y: d.val[k] })) };
+  };
+
+  const charts = [
+    ['chart-tl-fair', 'tlFair', [ds(STATE.fairness, '#4361ee', 'fairness_index')]],
+    ['chart-tl-programs', 'tlPrograms', [
+      ds(STATE.started,   '#4361ee', 'started'),
+      ds(STATE.active,    '#f59e0b', 'active'),
+      ds(STATE.completed, '#22c55e', 'completed'),
+    ]],
+    ['chart-tl-pool', 'tlPool', [ds(STATE.pool, '#22c55e', STATE.poolKey || 'pool')]],
+    ['chart-tl-dispatch', 'tlDispatch', [ds(STATE.dispP50, '#4361ee', 'p50'), ds(STATE.dispP99, '#ef4444', 'p99')]],
+    ['chart-tl-reqq', 'tlReqq', [ds(STATE.reqqP50, '#4361ee', 'p50'), ds(STATE.reqqP99, '#ef4444', 'p99')]],
+  ];
+  for (const [canvasId, key, datasets] of charts) {
+    if (STATE.charts[key]) STATE.charts[key].destroy();
+    const ch = new Chart(document.getElementById(canvasId), { type: 'line', data: { datasets }, options: baseOpts() });
+    STATE.charts[key] = ch;
+    makeClickSeek(ch);
+  }
+}
+
+// ========================================================================
+// Flows view
+// ========================================================================
+function pidColor(pid) {
+  let h = 0;
+  for (let i = 0; i < pid.length; i++) h = (h * 31 + pid.charCodeAt(i)) | 0;
+  return TAB20[Math.abs(h) % TAB20.length];
+}
+
+function renderPidGrid() {
+  const filter = (document.getElementById('pid-search').value || '').trim();
+  const grid = document.getElementById('pid-grid');
+  const items = STATE.pids.filter(p => !filter || p.includes(filter));
+  grid.innerHTML = items.map(pid => {
+    const checked = STATE.selectedPids.has(pid) ? 'checked' : '';
+    const col = pidColor(pid);
+    return `<label class="pid-chip"><input type="checkbox" data-pid="${pid}" ${checked} onchange="togglePid('${pid}', this.checked)"><span class="swatch" style="background:${col}"></span>${pid}</label>`;
+  }).join('');
+  document.getElementById('pid-selected-count').textContent = `${STATE.selectedPids.size} selected`;
+}
+function togglePid(pid, on) {
+  if (on) STATE.selectedPids.add(pid); else STATE.selectedPids.delete(pid);
+  document.getElementById('pid-selected-count').textContent = `${STATE.selectedPids.size} selected`;
+  renderFlowsView();
+}
+function clearPids() {
+  STATE.selectedPids.clear();
+  renderPidGrid();
+  renderFlowsView();
+}
+function selectTopPids(k) {
+  const lastIdx = STATE.N - 1;
+  const np = STATE.pids.length;
+  // Prefer attained_service_tokens (LAS); fall back to request_total when all NaN
+  let arr = STATE.pidData['attained_service_tokens'];
+  const allNan = !arr || STATE.pids.every((_, pi) => Number.isNaN(arr[lastIdx * np + pi]));
+  if (allNan) arr = STATE.pidData['request_total'];
+  const ranked = STATE.pids.map((pid, pi) => ({ pid, v: arr ? arr[lastIdx * np + pi] : 0 }));
+  ranked.sort((a, b) => (Number.isNaN(b.v) ? -1 : b.v) - (Number.isNaN(a.v) ? -1 : a.v));
+  STATE.selectedPids = new Set(ranked.slice(0, k).map(r => r.pid));
+  renderPidGrid();
+  renderFlowsView();
+}
+
+function flowSeries(metric, pid) {
+  const np = STATE.pids.length;
+  const pi = STATE.pidIdx[pid];
+  if (pi == null) return null;
+  const arr = STATE.pidData[metric];
+  if (!arr) return null;
+  const out = new Float32Array(STATE.N);
+  for (let i = 0; i < STATE.N; i++) out[i] = arr[i * np + pi];
+  return out;
+}
+
+function renderFlowCounter() {
+  if (!STATE.N) return;
+  const i = STATE.step;
+  document.getElementById('fc-total').textContent = STATE.pids.length;
+  document.getElementById('fc-started').textContent = STATE.started ? STATE.started[i] : '–';
+  document.getElementById('fc-active').textContent = STATE.active ? STATE.active[i] : '–';
+  document.getElementById('fc-completed').textContent = STATE.completed ? STATE.completed[i] : '–';
+  document.getElementById('fc-step').textContent = `${i} / ${STATE.N - 1}`;
+}
+
+function renderFlowLifecycleTable() {
+  const card = document.getElementById('flow-lifecycle-card');
+  const tbody = document.querySelector('#flow-lifecycle-table tbody');
+  if (!STATE.selectedPids.size) {
+    card.classList.add('hidden');
+    return;
+  }
+  card.classList.remove('hidden');
+  const t0 = STATE.ts ? STATE.ts[0] : 0;
+  const np = STATE.pids.length;
+  const att = STATE.pidData['attained_service_tokens'];
+  const rows = [];
+  for (const pid of STATE.selectedPids) {
+    const pi = STATE.pidIdx[pid];
+    if (pi == null) continue;
+    const fs = STATE.firstSeen[pi];
+    const la = STATE.lastActive[pi];
+    const fsT = fs >= 0 ? STATE.ts[fs] - t0 : null;
+    const laT = la >= 0 ? STATE.ts[la] - t0 : null;
+    const dSteps = (fs >= 0 && la >= 0) ? la - fs : null;
+    const dSec = (fsT != null && laT != null) ? laT - fsT : null;
+    let peak = -Infinity, finalAtt = NaN;
+    if (fs >= 0) {
+      for (let i = fs; i < STATE.N; i++) {
+        const v = att[i * np + pi];
+        if (Number.isNaN(v)) continue;
+        if (v > peak) peak = v;
+        finalAtt = v;
+      }
+    }
+    const lastInf = STATE.lastInflightStep ? STATE.lastInflightStep[pi] : -1;
+    const lastAtt = STATE.lastAttIncStep   ? STATE.lastAttIncStep[pi]   : -1;
+    const lastDec = STATE.lastDecreaseStep ? STATE.lastDecreaseStep[pi] : -1;
+    const lastQ   = STATE.lastQChgStep     ? STATE.lastQChgStep[pi]     : -1;
+    const nInc    = STATE.nIncreases       ? STATE.nIncreases[pi]       : 0;
+    const nDec    = STATE.nDecreases       ? STATE.nDecreases[pi]       : 0;
+    rows.push({ pid, fs, fsT, la, laT, lastInf, lastAtt, lastDec, lastQ, nInc, nDec, dSteps, dSec, peak, finalAtt });
+  }
+  rows.sort((a, b) => (a.fs|0) - (b.fs|0));
+  tbody.innerHTML = rows.map(r => `<tr>
+    <td><span class="swatch" style="background:${pidColor(r.pid)};display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px"></span>${r.pid}</td>
+    <td class="mono">${r.fs >= 0 ? r.fs : '–'}</td>
+    <td class="mono">${r.fsT != null ? r.fsT.toFixed(1) : '–'}</td>
+    <td class="mono">${r.la >= 0 ? r.la : '–'}</td>
+    <td class="mono">${r.laT != null ? r.laT.toFixed(1) : '–'}</td>
+    <td class="mono">${r.lastInf >= 0 ? r.lastInf : '–'}</td>
+    <td class="mono">${r.lastAtt >= 0 ? r.lastAtt : '–'}</td>
+    <td class="mono">${r.lastDec >= 0 ? r.lastDec : '–'}</td>
+    <td class="mono">${r.lastQ >= 0 ? r.lastQ : '–'}</td>
+    <td class="mono">${r.nInc}</td>
+    <td class="mono" style="${r.nDec > 0 ? 'color:var(--warn);font-weight:600' : ''}">${r.nDec}</td>
+    <td class="mono">${r.dSteps != null ? r.dSteps : '–'}</td>
+    <td class="mono">${r.dSec != null ? r.dSec.toFixed(1) : '–'}</td>
+    <td class="mono">${fmtNum(r.peak)}</td>
+    <td class="mono">${fmtNum(r.finalAtt)}</td>
+  </tr>`).join('');
+}
+
+function renderFlowsView() {
+  renderFlowCounter();
+  renderFlowLifecycleTable();
+  const c = chartColors();
+  const baseOpts = (yLabel) => ({
+    responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+    scales: {
+      x: { type: 'linear', ticks: { color: c.text, maxTicksLimit: 10 }, grid: { color: c.grid }, title: { display: true, text: 'step', color: c.text } },
+      y: { ticks: { color: c.text }, grid: { color: c.grid }, title: { display: !!yLabel, text: yLabel, color: c.text } },
+    },
+    plugins: {
+      legend: { labels: { color: c.text, boxWidth: 12, font: { size: 10 } } },
+      zoom: { zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' }, pan: { enabled: true, mode: 'x' } },
+    },
+  });
+  const buildDatasets = (metric) => {
+    const out = [];
+    for (const pid of STATE.selectedPids) {
+      const s = flowSeries(metric, pid);
+      if (!s) continue;
+      const d = downsample(s);
+      out.push({
+        label: pid,
+        data: d.idx.map((i, k) => ({ x: i, y: d.val[k] })),
+        borderColor: pidColor(pid),
+        backgroundColor: pidColor(pid) + '22',
+        pointRadius: 0, borderWidth: 1.4, fill: false,
+      });
+    }
+    return out;
+  };
+  const slots = [
+    ['chart-flow-service',   'flowService',   'attained_service_tokens', 'attained_service_tokens'],
+    ['chart-flow-running',   'flowRunning',   'request_running',         'running'],
+    ['chart-flow-total',     'flowTotal',     'request_total',           'request_total'],
+    ['chart-flow-wait',      'flowWait',      'avg_wait_ms',             'avg_wait_ms'],
+    ['chart-flow-duration',  'flowDuration',  'mean_duration_seconds',   'mean_duration_s'],
+    ['chart-flow-ttft',      'flowTtft',      'mean_ttft_seconds',       'mean_ttft_s'],
+    ['chart-flow-deficit',   'flowDeficit',   'deficit_tokens',          'deficit_tokens'],
+    ['chart-flow-qbytes',    'flowQbytes',    'queue_bytes',             'bytes'],
+  ];
+  for (const [canvasId, key, metric, yLabel] of slots) {
+    if (STATE.charts[key]) STATE.charts[key].destroy();
+    STATE.charts[key] = new Chart(document.getElementById(canvasId), {
+      type: 'line', data: { datasets: buildDatasets(metric) }, options: baseOpts(yLabel),
+    });
+  }
+}
+
+// ========================================================================
+// Pool view
+// ========================================================================
+function renderPoolView() {
+  const c = chartColors();
+  const baseOpts = (yLabel) => ({
+    responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'nearest', intersect: false, axis: 'x' },
+    scales: {
+      x: { type: 'linear', ticks: { color: c.text, maxTicksLimit: 10 }, grid: { color: c.grid }, title: { display: true, text: 'step', color: c.text } },
+      y: { ticks: { color: c.text }, grid: { color: c.grid }, title: { display: !!yLabel, text: yLabel, color: c.text } },
+    },
+    plugins: {
+      legend: { labels: { color: c.text } },
+      zoom: { zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' }, pan: { enabled: true, mode: 'x' } },
+    },
+  });
+
+  const POOL_COLORS = ['#4361ee','#22c55e','#f59e0b','#ef4444','#9467bd','#17becf'];
+
+  const buildPoolDatasets = (getter) => {
+    return STATE.epPoolKeys.map((pname, idx) => {
+      const arr = getter(pname);
+      const d = downsample(arr);
+      return {
+        label: pname,
+        data: d.idx.map((i, k) => ({ x: i, y: d.val[k] })),
+        borderColor: POOL_COLORS[idx % POOL_COLORS.length],
+        backgroundColor: POOL_COLORS[idx % POOL_COLORS.length] + '22',
+        pointRadius: 0, borderWidth: 1.5, fill: false,
+      };
+    });
+  };
+
+  // Datasets for cumulative-histogram series: per-step mean = sum / count.
+  const buildMeanDatasets = (keys, sumGetter, cntGetter) => {
+    return keys.map((k, idx) => {
+      const sum = sumGetter(k), cnt = cntGetter(k);
+      const mean = new Float32Array(STATE.N);
+      for (let i = 0; i < STATE.N; i++) {
+        const cv = cnt[i];
+        mean[i] = (cv > 0) ? sum[i] / cv : NaN;
+      }
+      const d = downsample(mean);
+      return {
+        label: k,
+        data: d.idx.map((i, j) => ({ x: i, y: d.val[j] })),
+        borderColor: POOL_COLORS[idx % POOL_COLORS.length],
+        backgroundColor: POOL_COLORS[idx % POOL_COLORS.length] + '22',
+        pointRadius: 0, borderWidth: 1.5, fill: false,
+      };
+    });
+  };
+
+  // Summary stat boxes — last non-NaN value per metric across all pools
+  const lastVal = (getter) => {
+    for (let i = STATE.N - 1; i >= 0; i--) {
+      for (const pname of STATE.epPoolKeys) {
+        const v = getter(pname)[i];
+        if (!Number.isNaN(v)) return v;
+      }
+    }
+    return NaN;
+  };
+  const poolStatsRow = document.getElementById('pool-stats-row');
+  if (STATE.epPoolKeys.length === 0) {
+    poolStatsRow.innerHTML = '<div style="color:var(--text-muted);font-size:0.8rem;padding:0.5rem">No endpoint_pool data in this file. Upgrade the scraper and re-run.</div>';
+  } else {
+    poolStatsRow.innerHTML = [
+      { label: 'Pools', value: STATE.epPoolKeys.length },
+      { label: 'KV cache (last)', value: fmtNum(lastVal(p => STATE.epKvCache[p])) },
+      { label: 'Queue size (last)', value: fmtNum(lastVal(p => STATE.epQueueSize[p])) },
+      { label: 'Running req (last)', value: fmtNum(lastVal(p => STATE.epRunningReq[p])) },
+      { label: 'Ready endpoints (last)', value: fmtNum(lastVal(p => STATE.epReadyEp[p])) },
+    ].map(s => `<div class="stat-box"><div class="label">${s.label}</div><div class="value">${s.value}</div></div>`).join('');
+  }
+
+  const slots = [
+    ['chart-pool-kv',      'poolKv',      p => STATE.epKvCache[p],    'kv_cache_utilization'],
+    ['chart-pool-queue',   'poolQueue',   p => STATE.epQueueSize[p],   'avg_queue_size'],
+    ['chart-pool-running', 'poolRunning', p => STATE.epRunningReq[p],  'avg_running_requests'],
+    ['chart-pool-ready',   'poolReady',   p => STATE.epReadyEp[p],     'ready_endpoints'],
+  ];
+  for (const [canvasId, key, getter, yLabel] of slots) {
+    if (STATE.charts[key]) STATE.charts[key].destroy();
+    STATE.charts[key] = new Chart(document.getElementById(canvasId), {
+      type: 'line',
+      data: { datasets: buildPoolDatasets(getter) },
+      options: baseOpts(yLabel),
+    });
+  }
+
+  // cache_metrics charts — cumulative mean per step (Step slider scrubs these).
+  const meanSlots = [
+    ['chart-pool-hitratio', 'poolHitRatio', STATE.cachePlugins, p => STATE.cacheHitRatioSum[p], p => STATE.cacheHitRatioCount[p], 'prefix_hit_ratio'],
+    ['chart-pool-hitbytes', 'poolHitBytes', STATE.cachePlugins, p => STATE.cacheHitBytesSum[p], p => STATE.cacheHitBytesCount[p], 'mean_hit_bytes'],
+    ['chart-pool-cachedtok','poolCachedTok',STATE.cacheFids,    f => STATE.cacheTokSum[f],      f => STATE.cacheTokCount[f],      'mean_cached_tokens'],
+  ];
+  for (const [canvasId, key, keys, sumGetter, cntGetter, yLabel] of meanSlots) {
+    if (STATE.charts[key]) STATE.charts[key].destroy();
+    STATE.charts[key] = new Chart(document.getElementById(canvasId), {
+      type: 'line',
+      data: { datasets: buildMeanDatasets(keys, sumGetter, cntGetter) },
+      options: baseOpts(yLabel),
+    });
+  }
+}
+
+// ========================================================================
+// Theme rebuild
+// ========================================================================
+function rebuildAllCharts() {
+  const tab = document.querySelector('.tab-btn.active');
+  if (!tab) return;
+  switchTab(tab.dataset.tab);
+}
+</script>
+</body>
+</html>

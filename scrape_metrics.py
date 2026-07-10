@@ -34,6 +34,17 @@ Cluster-level framework metrics (no fairness_id label):
   dispatch_cycle_duration_seconds       histogram (no labels)
   pool_saturation                       gauge per inference_pool
 
+Cache metrics (all histograms under the llm_d_epp subsystem):
+  prefix_indexer_hit_ratio              histogram per plugin_name (prefix
+                                          length matched / total, router-side)
+  prefix_indexer_hit_bytes              histogram per plugin_name (matched
+                                          prefix length in bytes)
+  request_cached_tokens                 histogram per fairness_id (prompt
+                                          tokens served from cache, as reported
+                                          by the model server)
+  Raw sum/count are stored per scrape so the visualizer can render a
+  cumulative mean or a step delta without re-scraping.
+
 Usage:
     python3 scrape_metrics.py \
         --url http://localhost:9090/metrics \
@@ -177,6 +188,30 @@ def extract_histogram_aggregate(metrics: Dict[str, float], name: str) -> Optiona
     if not saw:
         return None
     return {"buckets": buckets, "sum": total_sum, "count": total_count}
+
+
+def sum_count_by_label(metrics: Dict[str, float], metric_name: str, label: str) -> dict:
+    """Return {label_value: {"sum", "count"}} for a labeled histogram.
+
+    Series sharing a label value are summed, so a metric with extra labels
+    beyond `label` (e.g. plugin_type alongside plugin_name) rolls up per
+    label_value. Storing raw sum/count lets downstream code derive either a
+    cumulative mean or a per-window delta.
+    """
+    result: Dict[str, dict] = {}
+    lbl_re = re.compile(rf'{label}="([^"]+)"')
+    sum_re = re.compile(rf'^{re.escape(metric_name)}_sum\{{')
+    count_re = re.compile(rf'^{re.escape(metric_name)}_count\{{')
+    for key, val in metrics.items():
+        m = lbl_re.search(key)
+        if not m:
+            continue
+        lv = m.group(1)
+        if sum_re.match(key):
+            result.setdefault(lv, {})["sum"] = result.get(lv, {}).get("sum", 0.0) + val
+        elif count_re.match(key):
+            result.setdefault(lv, {})["count"] = result.get(lv, {}).get("count", 0.0) + val
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +413,24 @@ def collect_request_metrics(metrics: Dict[str, float]) -> dict:
     }
 
 
+def collect_cache_metrics(metrics: Dict[str, float]) -> dict:
+    """Build the cache-reuse metric block.
+
+    prefix_indexer_* are keyed by plugin_name (the prefix scorer); one entry
+    per loaded scorer. request_cached_tokens is keyed by fairness_id. Raw
+    sum/count are preserved per key for downstream mean/delta computation.
+    """
+    PREFIX = "llm_d_epp"
+    hit_ratio = sum_count_by_label(metrics, f"{PREFIX}_prefix_indexer_hit_ratio", "plugin_name")
+    hit_bytes = sum_count_by_label(metrics, f"{PREFIX}_prefix_indexer_hit_bytes", "plugin_name")
+    cached_tokens = sum_count_by_label(metrics, f"{PREFIX}_request_cached_tokens", "fairness_id")
+    return {
+        "prefix_hit_ratio": hit_ratio,      # {plugin_name: {sum, count}}
+        "prefix_hit_bytes": hit_bytes,      # {plugin_name: {sum, count}}
+        "cached_tokens":    cached_tokens,  # {fairness_id: {sum, count}}
+    }
+
+
 # ---------------------------------------------------------------------------
 # Single scrape
 # ---------------------------------------------------------------------------
@@ -396,6 +449,7 @@ def scrape_once(url: str) -> dict:
     fc = collect_flow_control(metrics)
     ep = collect_endpoint_pool(metrics)
     rm = collect_request_metrics(metrics)
+    cm = collect_cache_metrics(metrics)
 
     return {
         "ts":              ts,
@@ -404,6 +458,7 @@ def scrape_once(url: str) -> dict:
         "flow_control":    fc,
         "endpoint_pool":   ep,
         "request_metrics": rm,
+        "cache_metrics":   cm,
     }
 
 

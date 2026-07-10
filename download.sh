@@ -74,7 +74,7 @@ spec:
         claimName: ${PVC_NAME}
 EOF
 
-  oc -n "$NS" wait --for=condition=ready pod/"$HELPER_POD" --timeout=120s
+  oc -n "$NS" wait --for=condition=ready pod/"$HELPER_POD" --timeout=300s
 
   for strategy in las rr no-fairness; do
     echo "--- $strategy ---"

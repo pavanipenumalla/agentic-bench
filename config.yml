@@ -1,3 +1,5 @@
+# ghcr.io/llm-d/llm-d-router-endpoint-picker:v0.9.0
+# quay.io/dasari_surya_sai_venkatesh1/llm-d-router:evolved-las
 api:
   type: chat
   streaming: true
@@ -28,9 +30,9 @@ load:
   num_workers: 8
   request_timeout: 1800
   stages:
-    - concurrent_sessions: 200
-      num_sessions: 400
-      session_rate: 10
+    - concurrent_sessions: 160
+      num_sessions: 600
+      session_rate: 5
   worker_max_concurrency: 12000
 
 server:
