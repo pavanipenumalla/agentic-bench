@@ -148,6 +148,12 @@
   .reqwrap tbody tr.req:hover { background: var(--page); }
   .reqwrap tbody tr.req.sel { background: color-mix(in srgb, var(--series-1) 22%, var(--surface-1)); box-shadow: inset 3px 0 0 var(--series-1); }
 
+  /* collapsible section headers */
+  h2.collapser { cursor: pointer; user-select: none; display: flex; align-items: center; gap: 7px; }
+  h2.collapser .ccaret { display: inline-block; transition: transform .12s; color: var(--muted); font-size: 10px; }
+  h2.collapser.collapsed .ccaret { transform: rotate(-90deg); }
+  .collapsebody.hidden { display: none; }
+
   /* segmented control (reused for zoom presets) */
   .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
   .seg { border: none; background: var(--surface-1); color: var(--text-secondary); font: inherit; font-weight: 550; padding: 5px 12px; cursor: pointer; }
@@ -766,26 +772,30 @@ function selectProgram(id){
       <table><thead><tr><th>Pod</th><th>Requests</th><th>Share</th><th>Avg KV util @ dispatch</th></tr></thead><tbody>${podRows}</tbody></table>
     </div>
     <div class="section">
-      <h2>Request timeline <span class="light">(each bar = one request over wall-clock time; overlapping bars ran concurrently)</span></h2>
-      <div class="tlcontrols">
-        <div class="legend" style="margin:0">
-          <span><i class="swatch" style="background:var(--muted);opacity:.4"></i>wait / TTFT</span>
-          <span><i class="swatch" style="background:var(--muted)"></i>decode</span>
-          ${podLegend}
-        </div>
-        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
-          <button class="seg" style="border:1px solid var(--border);border-radius:8px" onclick="tlZoomFit()">Fit</button>
-          <span class="light" style="font-size:11px">Zoom</span>
-          <input type="range" min="-2" max="3" step="0.05" value="0" oninput="setTlZoom(Math.pow(10,+this.value))" title="time-axis zoom" />
-          <b id="tlZoomVal" style="font-variant-numeric:tabular-nums;font-size:12px">1.00x</b>
-        </div>
+      <h2 class="collapser" onclick="toggleCollapse(this)"><span class="ccaret">▾</span>Requests ${shown.length<p.records.length?`<span class="light">(first ${shown.length} of ${p.records.length})</span>`:''} <span class="light">(click a row or a timeline bar for detail)</span></h2>
+      <div class="collapsebody">
+        <div class="reqwrap"><table>${REQ_HEAD}<tbody>${shown.map((_,i)=>reqRowHTML(i)).join('')}</tbody></table></div>
+        <div id="reqPanel" class="reqpanel" style="display:none"></div>
       </div>
-      <div id="tlHost"></div>
     </div>
     <div class="section">
-      <h2>Requests ${shown.length<p.records.length?`<span class="light">(first ${shown.length} of ${p.records.length})</span>`:''} <span class="light">(click a row or a timeline bar for detail)</span></h2>
-      <div class="reqwrap"><table>${REQ_HEAD}<tbody>${shown.map((_,i)=>reqRowHTML(i)).join('')}</tbody></table></div>
-      <div id="reqPanel" class="reqpanel" style="display:none"></div>
+      <h2 class="collapser" onclick="toggleCollapse(this)"><span class="ccaret">▾</span>Request timeline <span class="light">(each bar = one request over wall-clock time; overlapping bars ran concurrently)</span></h2>
+      <div class="collapsebody">
+        <div class="tlcontrols">
+          <div class="legend" style="margin:0">
+            <span><i class="swatch" style="background:var(--muted);opacity:.4"></i>wait / TTFT</span>
+            <span><i class="swatch" style="background:var(--muted)"></i>decode</span>
+            ${podLegend}
+          </div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+            <button class="seg" style="border:1px solid var(--border);border-radius:8px" onclick="tlZoomFit()">Fit</button>
+            <span class="light" style="font-size:11px">Zoom</span>
+            <input type="range" min="-2" max="3" step="0.05" value="0" oninput="setTlZoom(Math.pow(10,+this.value))" title="time-axis zoom" />
+            <b id="tlZoomVal" style="font-variant-numeric:tabular-nums;font-size:12px">1.00x</b>
+          </div>
+        </div>
+        <div id="tlHost"></div>
+      </div>
     </div>`;
 
   renderTimeline();
@@ -896,8 +906,14 @@ function closeReqPanel(){
 
 window.selectProgram = selectProgram;
 window.renderOverview = renderOverview;
+function toggleCollapse(h){
+  h.classList.toggle('collapsed');
+  const body=h.nextElementSibling;
+  if(body&&body.classList.contains('collapsebody')) body.classList.toggle('hidden');
+}
 window.selectRequest = selectRequest;
 window.closeReqPanel = closeReqPanel;
+window.toggleCollapse = toggleCollapse;
 
 /* ---------- left list ---------- */
 function renderList(){
