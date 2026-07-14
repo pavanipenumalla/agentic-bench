@@ -148,20 +148,23 @@
   .reqwrap tbody tr.req:hover { background: var(--page); }
   .reqwrap tbody tr.req.sel { background: color-mix(in srgb, var(--series-1) 22%, var(--surface-1)); box-shadow: inset 3px 0 0 var(--series-1); }
 
-  /* flat/groups toggle */
+  /* segmented control (reused for zoom presets) */
   .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
   .seg { border: none; background: var(--surface-1); color: var(--text-secondary); font: inherit; font-weight: 550; padding: 5px 12px; cursor: pointer; }
   .seg + .seg { border-left: 1px solid var(--border); }
   .seg.active { background: color-mix(in srgb, var(--series-1) 16%, var(--surface-1)); color: var(--text-primary); }
-  .segbadge { background: var(--series-6); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 2px; }
 
-  /* grouped view */
-  .groupscroll { max-height: 460px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
-  .groupblock { border-bottom: 1px solid var(--border); }
-  .groupblock:last-child { border-bottom: none; }
-  .groupblock.multi { box-shadow: inset 3px 0 0 var(--series-6); }
-  .grouphdr { padding: 7px 14px; font-size: 12px; background: var(--page); position: sticky; top: 0; z-index: 1; border-bottom: 1px solid var(--border); }
-  .chip.conc { background: color-mix(in srgb, var(--series-6) 22%, transparent); color: var(--series-6); }
+  /* request timeline (Gantt) */
+  .tlbar-dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; vertical-align: middle; margin-right: 5px; }
+  .tlcontrols { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tlcontrols input[type=range] { width: 180px; accent-color: var(--series-1); }
+  .tlwrap { overflow: auto; max-height: 480px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-1); position: relative; }
+  .tlwrap svg { display: block; }
+  .tlbar rect.bar { cursor: pointer; }
+  .tlbar rect.hit { cursor: pointer; fill: transparent; }
+  .tlbar:hover rect.wait { opacity: .55; }
+  .tlbar rect.sel-ring { stroke: none; }
+  .tlbar.sel rect.sel-ring { stroke: var(--text-primary); stroke-width: 2; }
 
   /* detail panel below the requests table */
   .reqpanel { margin-top: 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; border-top: 3px solid var(--series-1); }
@@ -283,52 +286,22 @@ function kvColor(u){ if(u<0.15)return'var(--seq-100)'; if(u<0.35)return'var(--se
 let RECORDS = [], PROGRAMS = new Map(), ALL_PODS = [], POD_INDEX = new Map();
 let SHOWN = [];        // records currently rendered in the program requests table (arrival order)
 let SEL_REQ = null;    // index into SHOWN of the request shown in the detail panel
-let REQ_MODE = 'flat'; // 'flat' | 'groups'
-let GROUPS = [];        // concurrency windows over SHOWN: [{members:[idx...], peak, start, end}]
-let SINGLES = [];       // indices never simultaneously overlapping another request
-let OVERLAP = [];       // OVERLAP[i] = sorted list of indices whose interval overlaps SHOWN[i]
+let OVERLAP = [];      // OVERLAP[i] = sorted list of indices whose interval overlaps SHOWN[i]
+let TL_ZOOM = 1;       // timeline time-axis zoom multiplier
+let TL_BASE_PXPS = 1;  // px per second at zoom 1 (fits program span to container)
 
-// Concurrency windows: a maximal time span during which >=2 of this program's
-// requests are simultaneously in flight. A window's `peak` is the true maximum
-// simultaneous count in that span (matching the peak-concurrency metric), and
-// `members` are all requests in flight at any instant within it. This is NOT a
-// transitive/connected-component cluster: a single long request does not merge
-// otherwise-disjoint requests into one giant group.
-function computeGroups(recs){
-  const n=recs.length;
-  // pairwise overlap (n is small per program) for the detail panel's "overlapped this request" list
-  const overlap=recs.map(()=>[]);
+// True pairwise interval overlap: OVERLAP[i] lists every other request in flight at
+// the same time as SHOWN[i] (intervals [received, complete] intersect). Honest and
+// cheap (n small per program); no transitive bridging. Used by the detail panel.
+function computeOverlap(recs){
+  const n=recs.length; const overlap=recs.map(()=>[]);
   for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
     if(recs[i].ts_received_ms<recs[j].ts_complete_ms && recs[j].ts_received_ms<recs[i].ts_complete_ms){
       overlap[i].push(j); overlap[j].push(i);
     }
   }
   overlap.forEach(a=>a.sort((x,y)=>recs[x].ts_received_ms-recs[y].ts_received_ms));
-
-  // sweep to carve concurrency windows (cur>=2)
-  const ev=[];
-  recs.forEach((r,i)=>{ ev.push([r.ts_received_ms,1,i]); ev.push([r.ts_complete_ms,-1,i]); });
-  ev.sort((a,b)=> a[0]-b[0] || a[1]-b[1]);   // completions before arrivals at a tie
-  const active=new Set(); const groups=[]; let cur=0, win=null;
-  for(const [t,d,i] of ev){
-    if(d===1) active.add(i);
-    cur+=d;
-    if(cur>=2){
-      if(!win) win={members:new Set(), peak:cur, start:t};
-      active.forEach(a=>win.members.add(a));
-      win.peak=Math.max(win.peak,cur);
-    } else if(win){
-      active.forEach(a=>win.members.add(a));   // include the request that just ended
-      win.end=t; win.members=[...win.members]; groups.push(win); win=null;
-    }
-    if(d===-1) active.delete(i);
-  }
-  if(win){ win.end=ev[ev.length-1][0]; win.members=[...win.members]; groups.push(win); }
-  groups.forEach(g=>g.members.sort((a,b)=>recs[a].ts_received_ms-recs[b].ts_received_ms));
-
-  const inWindow=new Set(); groups.forEach(g=>g.members.forEach(i=>inWindow.add(i)));
-  const singles=[]; for(let i=0;i<n;i++) if(!inWindow.has(i)) singles.push(i);
-  return {groups, singles, overlap};
+  return overlap;
 }
 let selectedId = null;
 
@@ -506,6 +479,93 @@ function svgBars(items, opts={}){
     }).join('') + `</svg>`;
 }
 
+/* ---------- request timeline (Gantt) ----------
+   One row per request over a shared wall-clock axis at a fixed px-per-second scale
+   (TL_ZOOM * TL_BASE_PXPS). Overlapping bars = concurrent requests. Each bar has a
+   lighter [received, first_token] wait segment and a solid [first_token, complete]
+   decode segment, colored by chosen pod. Both axes scroll; bars are clickable and
+   drive the same detail panel as the table. */
+const TL={ rowH:18, labW:78, padT:22, padB:6, minBar:3 };
+
+function timelineDims(recs){
+  const xmin=Math.min(...recs.map(r=>r.ts_received_ms));
+  const xmax=Math.max(...recs.map(r=>r.ts_complete_ms));
+  const spanSec=Math.max(0.001,(xmax-xmin)/1000);
+  const pxps=TL_BASE_PXPS*TL_ZOOM;
+  const plotW=Math.max(200, spanSec*pxps);
+  return {xmin,xmax,spanSec,pxps,plotW};
+}
+
+function svgTimeline(recs){
+  if(!recs.length) return '<div style="color:var(--muted)">no requests</div>';
+  const {xmin,pxps,plotW}=timelineDims(recs);
+  const W=TL.labW+plotW+8, H=TL.padT+recs.length*TL.rowH+TL.padB;
+  const sx=t=>TL.labW+(t-xmin)/1000*pxps;
+
+  // time gridlines + top axis labels at a "nice" second interval for the current zoom
+  const spanSec=(Math.max(...recs.map(r=>r.ts_complete_ms))-xmin)/1000;
+  const targetTicks=Math.max(2,Math.floor(plotW/90));
+  const step=niceTicks(0,spanSec,targetTicks); // seconds ticks
+  const grid=step.map(s=>{ const x=TL.labW+s*pxps;
+    return `<line x1="${x.toFixed(1)}" x2="${x.toFixed(1)}" y1="${TL.padT}" y2="${H-TL.padB}" stroke="var(--grid)" stroke-width="1"/>
+            <text x="${x.toFixed(1)}" y="14" font-size="11" fill="var(--muted)" text-anchor="middle">${hms(xmin+s*1000)}</text>`;}).join('');
+
+  const bars=recs.map((r,i)=>{
+    const y=TL.padT+i*TL.rowH+2, h=TL.rowH-4;
+    const chosen=(r.target_pods&&r.target_pods[0])||'';
+    const col=podColorVar(POD_INDEX.get(chosen));
+    const x0=sx(r.ts_received_ms), xft=sx(r.ts_first_token_ms), xEnd=sx(r.ts_complete_ms);
+    const full=Math.max(TL.minBar, xEnd-x0);
+    const waitW=Math.max(0, Math.min(full, xft-x0));
+    const decW=Math.max(0, full-waitW);
+    const label=r.request_id.slice(0,8);
+    return `<g class="tlbar ${i===SEL_REQ?'sel':''}" data-req="${i}"
+              onclick="selectRequest(${i})"
+              onpointerenter="timelineHover(event,${i})" onpointerleave="timelineLeave()">
+      <text x="${TL.labW-6}" y="${y+h/2+4}" font-size="10.5" fill="var(--muted)" text-anchor="end" font-family="ui-monospace,monospace">${label}</text>
+      <rect class="wait" x="${x0.toFixed(1)}" y="${y}" width="${waitW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}" opacity="0.32"/>
+      <rect class="bar" x="${(x0+waitW).toFixed(1)}" y="${y}" width="${decW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}"/>
+      <rect class="sel-ring" x="${(x0-1).toFixed(1)}" y="${y-1}" width="${(full+2).toFixed(1)}" height="${h+2}" rx="3" fill="none"/>
+      <rect class="hit" x="${x0.toFixed(1)}" y="${y-1}" width="${Math.max(full,6).toFixed(1)}" height="${h+2}" fill="transparent"/>
+    </g>`;
+  }).join('');
+
+  return `<div class="tlwrap" id="tlScroll">
+    <svg width="${W.toFixed(0)}" height="${H}">
+      ${grid}${bars}
+    </svg>
+    <div class="charttip" id="tlTip" style="display:none;position:fixed"></div>
+  </div>`;
+}
+
+function renderTimeline(){
+  const host=document.getElementById('tlHost'); if(!host) return;
+  const prev=document.getElementById('tlScroll');
+  const ratio=prev && prev.scrollWidth ? prev.scrollLeft/prev.scrollWidth : 0;
+  host.innerHTML=svgTimeline(SHOWN);
+  const now=document.getElementById('tlScroll');
+  if(now) now.scrollLeft=ratio*now.scrollWidth;
+  const zl=document.getElementById('tlZoomVal'); if(zl) zl.textContent=TL_ZOOM.toFixed(2)+'x';
+}
+function setTlZoom(z){ TL_ZOOM=Math.max(0.05,Math.min(20,z)); renderTimeline(); }
+function tlZoomFit(){ TL_ZOOM=1; renderTimeline(); }
+function timelineHover(ev,i){
+  const r=SHOWN[i]; const tip=document.getElementById('tlTip'); if(!tip) return;
+  const ttft=r.ts_first_token_ms-r.ts_received_ms, e2e=r.ts_complete_ms-r.ts_received_ms;
+  const chosen=(r.target_pods&&r.target_pods[0])||'';
+  tip.innerHTML=`<div class="tt-x">${r.request_id.slice(0,8)} · ${new Date(r.ts_received_ms).toISOString().substr(11,12)}</div>
+    <div class="tt-row"><span class="tt-sw" style="background:${podColorVar(POD_INDEX.get(chosen))}"></span>${POD_SHORT(chosen)}</div>
+    <div class="tt-row">TTFT<b>${fmtMs(ttft)}</b></div>
+    <div class="tt-row">E2E<b>${fmtMs(e2e)}</b></div>
+    <div class="tt-row">tokens<b>${r.input_tokens} in / ${r.output_tokens} out</b></div>`;
+  tip.style.display='block';
+  tip.style.left=Math.min(window.innerWidth-tip.offsetWidth-8, ev.clientX+14)+'px';
+  tip.style.top=Math.min(window.innerHeight-tip.offsetHeight-8, ev.clientY+14)+'px';
+}
+function timelineLeave(){ const tip=document.getElementById('tlTip'); if(tip) tip.style.display='none'; }
+window.setTlZoom=setTlZoom; window.tlZoomFit=tlZoomFit;
+window.timelineHover=timelineHover; window.timelineLeave=timelineLeave;
+
 /* time-bucketed pool series: concurrency, arrivals, per-pod kv */
 function poolTimeSeries(nbuckets=120){
   const tmin=Math.min(...RECORDS.map(r=>r.ts_received_ms));
@@ -656,9 +716,13 @@ function selectProgram(id){
   }).join('');
 
   const shown=p.records.slice(0,500);
-  SHOWN=shown; SEL_REQ=null; REQ_MODE='flat';
-  const g=computeGroups(shown); GROUPS=g.groups; SINGLES=g.singles; OVERLAP=g.overlap;
-  const multiGroups=GROUPS.length;
+  SHOWN=shown; SEL_REQ=null;
+  OVERLAP=computeOverlap(shown);
+  // base px/sec so the whole program span fits ~ the main pane width at zoom 1
+  const spanSec=Math.max(0.001,(Math.max(...shown.map(r=>r.ts_complete_ms))-Math.min(...shown.map(r=>r.ts_received_ms)))/1000);
+  const fitW=(el.clientWidth||1100)-48-TL.labW;
+  TL_BASE_PXPS=Math.max(0.02, fitW/spanSec); TL_ZOOM=1;
+  const podLegend=ALL_PODS.map((pod,i)=>`<span><i class="swatch" style="background:${podColorVar(i)}"></i>${POD_SHORT(pod)}</span>`).join('');
 
   el.innerHTML = `
     <div class="crumbs"><a onclick="renderOverview()">Pool overview</a><span class="sep">/</span><b>Program</b></div>
@@ -702,71 +766,49 @@ function selectProgram(id){
       <table><thead><tr><th>Pod</th><th>Requests</th><th>Share</th><th>Avg KV util @ dispatch</th></tr></thead><tbody>${podRows}</tbody></table>
     </div>
     <div class="section">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <h2 style="margin:0">Requests ${shown.length<p.records.length?`<span class="light">(first ${shown.length} of ${p.records.length})</span>`:''}</h2>
-        <div class="segmented" style="margin-left:auto">
-          <button class="seg active" id="segFlat" onclick="setReqMode('flat')">Flat</button>
-          <button class="seg" id="segGroups" onclick="setReqMode('groups')">Concurrent groups${multiGroups?` <span class="segbadge">${multiGroups}</span>`:''}</button>
+      <h2>Request timeline <span class="light">(each bar = one request over wall-clock time; overlapping bars ran concurrently)</span></h2>
+      <div class="tlcontrols">
+        <div class="legend" style="margin:0">
+          <span><i class="swatch" style="background:var(--muted);opacity:.4"></i>wait / TTFT</span>
+          <span><i class="swatch" style="background:var(--muted)"></i>decode</span>
+          ${podLegend}
+        </div>
+        <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+          <button class="seg" style="border:1px solid var(--border);border-radius:8px" onclick="tlZoomFit()">Fit</button>
+          <span class="light" style="font-size:11px">Zoom</span>
+          <input type="range" min="-2" max="3" step="0.05" value="0" oninput="setTlZoom(Math.pow(10,+this.value))" title="time-axis zoom" />
+          <b id="tlZoomVal" style="font-variant-numeric:tabular-nums;font-size:12px">1.00x</b>
         </div>
       </div>
-      <div id="reqTableHost"></div>
+      <div id="tlHost"></div>
+    </div>
+    <div class="section">
+      <h2>Requests ${shown.length<p.records.length?`<span class="light">(first ${shown.length} of ${p.records.length})</span>`:''} <span class="light">(click a row or a timeline bar for detail)</span></h2>
+      <div class="reqwrap"><table>${REQ_HEAD}<tbody>${shown.map((_,i)=>reqRowHTML(i)).join('')}</tbody></table></div>
       <div id="reqPanel" class="reqpanel" style="display:none"></div>
     </div>`;
 
-  renderReqTable();
+  renderTimeline();
 }
 
-/* ---------- requests table (flat or grouped) + detail panel ---------- */
-function reqRowHTML(i, rowid){
+/* ---------- requests table + detail panel ---------- */
+function reqRowHTML(i){
   const r=SHOWN[i];
   const ttft=r.ts_first_token_ms-r.ts_received_ms, e2e=r.ts_complete_ms-r.ts_received_ms;
   const chosen=(r.target_pods&&r.target_pods[0])||'';
-  return `<tr class="req ${i===SEL_REQ?'sel':''}" data-req="${i}" id="${rowid||('reqrow-'+i)}" onclick="selectRequest(${i})" title="Click for dispatch snapshot">
+  const dot=`<i class="tlbar-dot" style="background:${podColorVar(POD_INDEX.get(chosen))}"></i>`;
+  return `<tr class="req ${i===SEL_REQ?'sel':''}" data-req="${i}" onclick="selectRequest(${i})" title="Click for dispatch snapshot">
     <td class="mono">${new Date(r.ts_received_ms).toISOString().substr(11,12)}</td>
     <td class="mono">${r.request_id.slice(0,8)}</td>
     <td>${r.input_tokens}</td><td>${r.output_tokens}</td><td>${r.cached_tokens}</td>
     <td>${fmtPct(r.prefix_hit_ratio||0)}</td><td>${fmtMs(ttft)}</td><td>${fmtMs(e2e)}</td>
-    <td><span class="podname">${POD_SHORT(chosen)}</span></td></tr>`;
+    <td>${dot}<span class="podname">${POD_SHORT(chosen)}</span></td></tr>`;
 }
 const REQ_HEAD=`<thead><tr><th>Received</th><th>Req id</th><th>In</th><th>Out</th><th>Cached</th><th>Prefix hit</th><th>TTFT</th><th>E2E</th><th>Chosen pod</th></tr></thead>`;
 
-function renderReqTable(){
-  const host=document.getElementById('reqTableHost'); if(!host) return;
-  document.getElementById('segFlat').classList.toggle('active', REQ_MODE==='flat');
-  document.getElementById('segGroups').classList.toggle('active', REQ_MODE==='groups');
-
-  if(REQ_MODE==='flat'){
-    const rows=SHOWN.map((_,i)=>reqRowHTML(i)).join('');
-    host.innerHTML=`<div class="reqwrap"><table>${REQ_HEAD}<tbody>${rows}</tbody></table></div>`;
-    highlightSelected(); return;
-  }
-  // grouped: each concurrency window (>=2 simultaneously in flight), largest peak first.
-  const order=[...GROUPS.keys()].sort((a,b)=> (GROUPS[b].peak-GROUPS[a].peak) || (GROUPS[a].start-GROUPS[b].start));
-  const winBlocks=order.map((gi,ord)=>{
-    const gr=GROUPS[gi], span=gr.end-gr.start;
-    const rows=gr.members.map(i=>reqRowHTML(i, `wr-${ord}-${i}`)).join('');
-    return `<div class="groupblock multi">
-      <div class="grouphdr">
-        <span class="chip conc">peak ${gr.peak} concurrent</span>
-        <span style="color:var(--muted)">${gr.members.length} request${gr.members.length>1?'s':''} in flight · span ${fmtMs(span)} · ${hms(gr.start)} → ${hms(gr.end)}</span>
-      </div>
-      <div class="reqwrap" style="max-height:none;border:none;border-radius:0"><table>${REQ_HEAD}<tbody>${rows}</tbody></table></div>
-    </div>`;
-  }).join('');
-  const singleBlock = SINGLES.length ? `<div class="groupblock">
-      <div class="grouphdr"><span style="color:var(--muted)">${SINGLES.length} request${SINGLES.length>1?'s':''} that never overlapped another (ran alone)</span></div>
-      <div class="reqwrap" style="max-height:none;border:none;border-radius:0"><table>${REQ_HEAD}<tbody>${SINGLES.map(i=>reqRowHTML(i,`sr-${i}`)).join('')}</tbody></table></div>
-    </div>` : '';
-  const empty = GROUPS.length ? '' : `<div class="grouphdr"><span style="color:var(--muted)">No concurrency windows — this program's requests never overlapped each other.</span></div>`;
-  host.innerHTML=`<div class="groupscroll">${empty}${winBlocks}${singleBlock}</div>`;
-  highlightSelected();
-}
-
-function setReqMode(mode){ REQ_MODE=mode; renderReqTable(); }
-
 function highlightSelected(){
-  document.querySelectorAll('tr.req.sel').forEach(t=>t.classList.remove('sel'));
-  if(SEL_REQ!=null) document.querySelectorAll(`tr.req[data-req="${SEL_REQ}"]`).forEach(t=>t.classList.add('sel'));
+  document.querySelectorAll('tr.req.sel, .tlbar.sel').forEach(t=>t.classList.remove('sel'));
+  if(SEL_REQ!=null) document.querySelectorAll(`tr.req[data-req="${SEL_REQ}"], .tlbar[data-req="${SEL_REQ}"]`).forEach(t=>t.classList.add('sel'));
 }
 /* detail panel below the table: request fields + pod-state-at-dispatch + concurrent group */
 function requestDetailHTML(i){
@@ -814,16 +856,7 @@ function requestDetailHTML(i){
   return `<div class="reqdetail">
     <div class="paneltop">
       <h4 style="margin:0">Request detail</h4>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
-        <span class="light" style="font-size:11px">Panel size</span>
-        <div class="segmented">
-          <button class="seg ${PANEL_SIZE==='s'?'active':''}" onclick="setPanelSize('s')">S</button>
-          <button class="seg ${PANEL_SIZE==='m'?'active':''}" onclick="setPanelSize('m')">M</button>
-          <button class="seg ${PANEL_SIZE==='l'?'active':''}" onclick="setPanelSize('l')">L</button>
-          <button class="seg ${PANEL_SIZE==='full'?'active':''}" onclick="setPanelSize('full')">Full</button>
-        </div>
-        <button class="btn" style="padding:3px 10px" onclick="closeReqPanel()">Close</button>
-      </div>
+      <button class="btn" style="margin-left:auto;padding:3px 10px" onclick="closeReqPanel()">Close</button>
     </div>
     <div class="kv">
       ${kv('Request id', `<span style="font-family:ui-monospace,monospace">${r.request_id}</span>`)}
@@ -864,7 +897,6 @@ function closeReqPanel(){
 window.selectProgram = selectProgram;
 window.renderOverview = renderOverview;
 window.selectRequest = selectRequest;
-window.setReqMode = setReqMode;
 window.closeReqPanel = closeReqPanel;
 
 /* ---------- left list ---------- */
