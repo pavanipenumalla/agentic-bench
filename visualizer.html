@@ -775,7 +775,6 @@ function selectProgram(id){
       <h2 class="collapser" onclick="toggleCollapse(this)"><span class="ccaret">▾</span>Requests ${shown.length<p.records.length?`<span class="light">(first ${shown.length} of ${p.records.length})</span>`:''} <span class="light">(click a row or a timeline bar for detail)</span></h2>
       <div class="collapsebody">
         <div class="reqwrap"><table>${REQ_HEAD}<tbody>${shown.map((_,i)=>reqRowHTML(i)).join('')}</tbody></table></div>
-        <div id="reqPanel" class="reqpanel" style="display:none"></div>
       </div>
     </div>
     <div class="section">
@@ -796,7 +795,8 @@ function selectProgram(id){
         </div>
         <div id="tlHost"></div>
       </div>
-    </div>`;
+    </div>
+    <div id="reqPanel" class="reqpanel" style="display:none"></div>`;
 
   renderTimeline();
 }
