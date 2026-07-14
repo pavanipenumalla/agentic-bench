@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Records Visualizer — Programs</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;  /* blue  */
+    --series-2: #1baf7a;  /* aqua  */
+    --series-3: #eda100;  /* yellow */
+    --series-4: #008300;  /* green */
+    --series-5: #4a3aa7;  /* violet */
+    --series-6: #e34948;  /* red */
+    --good: #0ca30c;
+    --warning: #fab219;
+    --critical: #d03b3b;
+    --seq-100:#cde2fb; --seq-250:#86b6ef; --seq-400:#3987e5; --seq-550:#1c5cab; --seq-700:#0d366b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #199e70;
+      --series-3: #c98500;
+      --series-4: #008300;
+      --series-5: #9085e9;
+      --series-6: #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    font-size: 14px; line-height: 1.4;
+  }
+  header.appbar {
+    padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface-1);
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  header.appbar h1 { font-size: 16px; margin: 0; font-weight: 650; }
+  header.appbar .meta { color: var(--muted); font-size: 12px; }
+  .spacer { margin-left: auto; }
+  .btn {
+    padding: 6px 12px; border-radius: 8px; cursor: pointer; font: inherit; font-weight: 550;
+    border: 1px solid var(--border); background: var(--page); color: var(--text-primary);
+  }
+  .btn:hover { border-color: var(--series-1); }
+  .tabs { display: flex; gap: 4px; }
+  .tab { padding: 6px 14px; border-radius: 8px; cursor: pointer; font-weight: 550; color: var(--text-secondary); border: 1px solid transparent; }
+  .tab.active { background: var(--page); border-color: var(--border); color: var(--text-primary); }
+
+  /* drop / upload zone */
+  #dropzone {
+    position: fixed; inset: 0; background: color-mix(in srgb, var(--series-1) 8%, var(--page));
+    display: none; align-items: center; justify-content: center; z-index: 50;
+    border: 3px dashed var(--series-1); font-size: 18px; color: var(--series-1); font-weight: 600;
+  }
+  #dropzone.show { display: flex; }
+
+  .welcome { max-width: 640px; margin: 12vh auto; text-align: center; padding: 0 20px; }
+  .welcome h2 { font-weight: 650; }
+  .welcome p { color: var(--text-secondary); }
+  .uploadcard {
+    margin-top: 22px; border: 2px dashed var(--border); border-radius: 16px; padding: 36px 24px;
+    background: var(--surface-1); cursor: pointer;
+  }
+  .uploadcard:hover { border-color: var(--series-1); }
+  .uploadcard strong { color: var(--series-1); }
+  code { font-family: ui-monospace, monospace; background: var(--page); padding: 1px 5px; border-radius: 5px; }
+
+  .layout { display: grid; grid-template-columns: 340px 1fr; height: calc(100vh - 54px); }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; height: auto; } }
+
+  .rail { border-right: 1px solid var(--border); background: var(--surface-1); display: flex; flex-direction: column; min-height: 0; }
+  .filters { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+  .filters h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  .field label b { color: var(--text-primary); font-variant-numeric: tabular-nums; font-weight: 600; }
+  input[type=range] { width: 100%; accent-color: var(--series-1); }
+  input[type=search], select {
+    width: 100%; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--page); color: var(--text-primary); font: inherit;
+  }
+  .allbtn { width: 100%; margin-top: 4px; }
+
+  .list-head { padding: 8px 16px; font-size: 11px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted); display: flex; justify-content: space-between; }
+  .proglist { overflow-y: auto; flex: 1; min-height: 160px; }
+  .progrow { padding: 8px 16px; border-bottom: 1px solid var(--border); cursor: pointer; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; }
+  .progrow:hover { background: var(--page); }
+  .progrow.sel { background: color-mix(in srgb, var(--series-1) 14%, var(--surface-1)); }
+  .progrow .pid { font-size: 12px; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progrow .cnt { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-secondary); font-weight: 600; }
+  .progrow .bar { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--grid); overflow: hidden; }
+  .progrow .bar i { display: block; height: 100%; background: var(--series-1); border-radius: 2px; }
+
+  .main { overflow-y: auto; padding: 20px 24px; min-height: 0; }
+  .section { margin-bottom: 26px; }
+  .section > h2 { font-size: 12px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted); margin: 0 0 12px; }
+  .section > h2 .light { text-transform: none; letter-spacing: 0; color: var(--muted); font-weight: 400; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .tile .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing:.04em; }
+  .tile .v { font-size: 24px; font-weight: 650; margin-top: 4px; }
+  .tile .sub { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+
+  table { border-collapse: collapse; width: 100%; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 8px 12px; text-align: right; font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--border); }
+  th:first-child, td:first-child { text-align: left; font-variant-numeric: normal; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing:.04em; color: var(--muted); font-weight: 600; background: var(--page); }
+  tr:last-child td { border-bottom: none; }
+  td .podname, td.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .chip { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+  .chip.chosen { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--good); }
+
+  .kvbar { position: relative; height: 8px; border-radius: 4px; background: var(--grid); overflow: hidden; min-width: 80px; display: inline-block; vertical-align: middle; }
+  .kvbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; }
+
+  .reqwrap { max-height: 420px; overflow: auto; border-radius: 12px; border: 1px solid var(--border); }
+  .reqwrap table { border: none; border-radius: 0; }
+  .reqwrap thead th { position: sticky; top: 0; z-index: 1; }
+  .reqwrap tbody tr.req { cursor: pointer; }
+  .reqwrap tbody tr.req:hover { background: var(--page); }
+  .reqwrap tbody tr.req.sel { background: color-mix(in srgb, var(--series-1) 22%, var(--surface-1)); box-shadow: inset 3px 0 0 var(--series-1); }
+
+  /* flat/groups toggle */
+  .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .seg { border: none; background: var(--surface-1); color: var(--text-secondary); font: inherit; font-weight: 550; padding: 5px 12px; cursor: pointer; }
+  .seg + .seg { border-left: 1px solid var(--border); }
+  .seg.active { background: color-mix(in srgb, var(--series-1) 16%, var(--surface-1)); color: var(--text-primary); }
+  .segbadge { background: var(--series-6); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 11px; margin-left: 2px; }
+
+  /* grouped view */
+  .groupscroll { max-height: 460px; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
+  .groupblock { border-bottom: 1px solid var(--border); }
+  .groupblock:last-child { border-bottom: none; }
+  .groupblock.multi { box-shadow: inset 3px 0 0 var(--series-6); }
+  .grouphdr { padding: 7px 14px; font-size: 12px; background: var(--page); position: sticky; top: 0; z-index: 1; border-bottom: 1px solid var(--border); }
+  .chip.conc { background: color-mix(in srgb, var(--series-6) 22%, transparent); color: var(--series-6); }
+
+  /* detail panel below the requests table */
+  .reqpanel { margin-top: 14px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; border-top: 3px solid var(--series-1); }
+  .reqdetail { padding: 16px 18px; }
+  .reqdetail .paneltop { display: flex; align-items: center; margin-bottom: 12px; }
+  .reqdetail h4 { font-size: 11px; text-transform: uppercase; letter-spacing:.06em; color: var(--muted); margin: 16px 0 8px; }
+  .reqdetail .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 8px 20px; }
+  .reqdetail .kv div { font-size: 12px; }
+  .reqdetail .kv span { color: var(--muted); display: block; }
+  .reqdetail .kv b { font-variant-numeric: tabular-nums; font-weight: 600; word-break: break-all; }
+  .reqdetail tr.chosenpod td { background: color-mix(in srgb, var(--good) 12%, var(--surface-1)); }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--text-secondary); margin-bottom: 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  svg text { font-family: system-ui, sans-serif; }
+
+  /* line chart: SVG holds geometry only; axis labels are HTML so they never distort */
+  .linechart { width: 100%; }
+  .linechart .plotbox { position: absolute; }
+  .linechart .plotbox svg { display: block; overflow: visible; }
+  .linechart .ylabs { position: absolute; left: 0; top: 0; bottom: 0; }
+  .linechart .ylab { position: absolute; right: 8px; transform: translateY(-50%); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .linechart .xlab { position: absolute; bottom: 2px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .linechart .xlab.xl1 { text-align: right; }
+  .charttip {
+    position: absolute; z-index: 5; pointer-events: none; background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font-size: 12px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); min-width: 120px;
+  }
+  .charttip .tt-x { color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .charttip .tt-row { display: flex; align-items: center; gap: 6px; }
+  .charttip .tt-row b { margin-left: auto; font-variant-numeric: tabular-nums; padding-left: 12px; }
+  .charttip .tt-sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  .crumbs { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; font-size: 13px; }
+  .crumbs a { color: var(--series-1); cursor: pointer; text-decoration: none; }
+  .crumbs .sep { color: var(--muted); }
+</style>
+</head>
+<body>
+<header class="appbar">
+  <h1>Records Visualizer</h1>
+  <span class="meta" id="globalMeta"></span>
+  <div class="spacer"></div>
+  <div class="tabs"><div class="tab active" data-tab="programs">Programs</div></div>
+  <button class="btn" id="uploadBtn">Load records…</button>
+  <input type="file" id="fileInput" accept=".jsonl,.json,.txt" style="display:none" />
+</header>
+
+<div id="dropzone">Drop a <code>records.jsonl</code> file to load</div>
+
+<!-- welcome / upload state -->
+<div id="welcome" class="welcome" style="display:none">
+  <h2>Load a records file</h2>
+  <p>Drop or choose a <code>records.jsonl</code> produced by the EPP <code>/debug/request-records</code> drain.
+     Everything is parsed and rendered locally in your browser.</p>
+  <div class="uploadcard" id="uploadCard">
+    <div style="font-size:28px;margin-bottom:8px">⬆</div>
+    <div><strong>Choose a file</strong> or drop it anywhere on this page</div>
+    <div style="color:var(--muted);margin-top:6px;font-size:12px">.jsonl — one JSON record per line</div>
+  </div>
+  <p style="margin-top:20px;color:var(--muted);font-size:12px">
+    Tip: if a <code>records.jsonl</code> sits next to this file and you serve the folder over HTTP
+    (<code>python3 -m http.server</code>), it loads automatically.
+  </p>
+</div>
+
+<div class="layout" id="app" style="display:none">
+  <aside class="rail">
+    <div class="filters">
+      <h2>Filters</h2>
+      <div class="field"><input type="search" id="searchBox" placeholder="Search program id…" /></div>
+      <div class="field">
+        <label>Min requests <b id="minReqVal">0</b></label>
+        <input type="range" id="minReq" min="0" max="100" value="0" />
+      </div>
+      <div class="field">
+        <label>Max requests <b id="maxReqVal">any</b></label>
+        <input type="range" id="maxReq" min="0" max="100" value="0" />
+      </div>
+      <div class="field">
+        <label>Min peak concurrency <b id="maxConcVal">any</b></label>
+        <input type="range" id="maxConc" min="0" max="10" value="0" />
+      </div>
+      <div class="field">
+        <label style="margin-bottom:4px">Sort by</label>
+        <select id="sortBy">
+          <option value="count">Request count</option>
+          <option value="maxconc">Peak concurrency</option>
+          <option value="ttft">Avg TTFT</option>
+          <option value="e2e">Avg end-to-end</option>
+          <option value="out">Output tokens</option>
+          <option value="id">Program id</option>
+        </select>
+      </div>
+      <button class="btn allbtn" id="overviewBtn">Show pool overview</button>
+    </div>
+    <div class="list-head"><span>Programs</span><span id="listCount"></span></div>
+    <div class="proglist" id="progList"></div>
+  </aside>
+
+  <main class="main" id="mainPane"></main>
+</div>
+
+<script>
+/* ---------- helpers ---------- */
+const POD_SHORT = p => { const m = String(p).match(/-([a-z0-9]{4,6})(-rank-\d+)$/i); return m ? m[1] + m[2] : String(p).split('/').pop(); };
+const fmtInt = n => Math.round(n).toLocaleString();
+const fmtMs = n => n == null || isNaN(n) ? '—' : (n >= 1000 ? (n/1000).toFixed(2)+' s' : Math.round(n)+' ms');
+const fmtPct = n => (n*100).toFixed(1) + '%';
+const mean = a => a.length ? a.reduce((s,x)=>s+x,0)/a.length : 0;
+const sum = a => a.reduce((s,x)=>s+x,0);
+function pct(arr, p){ if(!arr.length) return 0; const s=[...arr].sort((a,b)=>a-b); return s[Math.min(s.length-1, Math.floor(p/100*s.length))]; }
+const hms = ms => new Date(ms).toISOString().substr(11,8);
+function podColorVar(i){ return `var(--series-${(i%6)+1})`; }
+function kvColor(u){ if(u<0.15)return'var(--seq-100)'; if(u<0.35)return'var(--seq-250)'; if(u<0.6)return'var(--seq-400)'; if(u<0.85)return'var(--seq-550)'; return'var(--seq-700)'; }
+
+let RECORDS = [], PROGRAMS = new Map(), ALL_PODS = [], POD_INDEX = new Map();
+let SHOWN = [];        // records currently rendered in the program requests table (arrival order)
+let SEL_REQ = null;    // index into SHOWN of the request shown in the detail panel
+let REQ_MODE = 'flat'; // 'flat' | 'groups'
+let GROUPS = [];        // concurrency windows over SHOWN: [{members:[idx...], peak, start, end}]
+let SINGLES = [];       // indices never simultaneously overlapping another request
+let OVERLAP = [];       // OVERLAP[i] = sorted list of indices whose interval overlaps SHOWN[i]
+
+// Concurrency windows: a maximal time span during which >=2 of this program's
+// requests are simultaneously in flight. A window's `peak` is the true maximum
+// simultaneous count in that span (matching the peak-concurrency metric), and
+// `members` are all requests in flight at any instant within it. This is NOT a
+// transitive/connected-component cluster: a single long request does not merge
+// otherwise-disjoint requests into one giant group.
+function computeGroups(recs){
+  const n=recs.length;
+  // pairwise overlap (n is small per program) for the detail panel's "overlapped this request" list
+  const overlap=recs.map(()=>[]);
+  for(let i=0;i<n;i++) for(let j=i+1;j<n;j++){
+    if(recs[i].ts_received_ms<recs[j].ts_complete_ms && recs[j].ts_received_ms<recs[i].ts_complete_ms){
+      overlap[i].push(j); overlap[j].push(i);
+    }
+  }
+  overlap.forEach(a=>a.sort((x,y)=>recs[x].ts_received_ms-recs[y].ts_received_ms));
+
+  // sweep to carve concurrency windows (cur>=2)
+  const ev=[];
+  recs.forEach((r,i)=>{ ev.push([r.ts_received_ms,1,i]); ev.push([r.ts_complete_ms,-1,i]); });
+  ev.sort((a,b)=> a[0]-b[0] || a[1]-b[1]);   // completions before arrivals at a tie
+  const active=new Set(); const groups=[]; let cur=0, win=null;
+  for(const [t,d,i] of ev){
+    if(d===1) active.add(i);
+    cur+=d;
+    if(cur>=2){
+      if(!win) win={members:new Set(), peak:cur, start:t};
+      active.forEach(a=>win.members.add(a));
+      win.peak=Math.max(win.peak,cur);
+    } else if(win){
+      active.forEach(a=>win.members.add(a));   // include the request that just ended
+      win.end=t; win.members=[...win.members]; groups.push(win); win=null;
+    }
+    if(d===-1) active.delete(i);
+  }
+  if(win){ win.end=ev[ev.length-1][0]; win.members=[...win.members]; groups.push(win); }
+  groups.forEach(g=>g.members.sort((a,b)=>recs[a].ts_received_ms-recs[b].ts_received_ms));
+
+  const inWindow=new Set(); groups.forEach(g=>g.members.forEach(i=>inWindow.add(i)));
+  const singles=[]; for(let i=0;i<n;i++) if(!inWindow.has(i)) singles.push(i);
+  return {groups, singles, overlap};
+}
+let selectedId = null;
+
+/* peak overlap of [received,complete] */
+function peakConcurrency(recs){
+  const ev=[]; for(const r of recs){ ev.push([r.ts_received_ms,1]); ev.push([r.ts_complete_ms,-1]); }
+  ev.sort((a,b)=> a[0]-b[0] || a[1]-b[1]);
+  let cur=0,peak=0; for(const [,d] of ev){ cur+=d; if(cur>peak)peak=cur; } return peak;
+}
+
+function computeProgramStats(recs){
+  const ttft=[],e2e=[],decode=[],inTok=[],outTok=[],cached=[],prefix=[];
+  const podCount=new Map(), podKvSum=new Map(), podKvN=new Map();
+  for(const r of recs){
+    ttft.push(r.ts_first_token_ms-r.ts_received_ms);
+    e2e.push(r.ts_complete_ms-r.ts_received_ms);
+    decode.push(r.ts_complete_ms-r.ts_first_token_ms);
+    inTok.push(r.input_tokens); outTok.push(r.output_tokens);
+    cached.push(r.cached_tokens); prefix.push(r.prefix_hit_ratio||0);
+    const chosen=(r.target_pods&&r.target_pods[0])||r.target_endpoint;
+    podCount.set(chosen,(podCount.get(chosen)||0)+1);
+    for(const [pod,st] of Object.entries(r.pod_state_at_dispatch||{})){
+      podKvSum.set(pod,(podKvSum.get(pod)||0)+(st.kv_util||0));
+      podKvN.set(pod,(podKvN.get(pod)||0)+1);
+    }
+  }
+  return {
+    count:recs.length,
+    firstTs:Math.min(...recs.map(r=>r.ts_received_ms)),
+    lastTs:Math.max(...recs.map(r=>r.ts_received_ms)),
+    peakConc:peakConcurrency(recs),
+    ttftAvg:mean(ttft), ttftP95:pct(ttft,95),
+    e2eAvg:mean(e2e), e2eP95:pct(e2e,95), decodeAvg:mean(decode),
+    inTot:sum(inTok), outTot:sum(outTok), inAvg:mean(inTok), outAvg:mean(outTok),
+    cachedTot:sum(cached), prefixAvg:mean(prefix),
+    podCount,
+    podKv:[...podKvN.keys()].reduce((o,p)=>{o[p]=podKvSum.get(p)/podKvN.get(p);return o;},{}),
+  };
+}
+
+function buildPrograms(){
+  PROGRAMS=new Map(); const byId=new Map(); const podset=new Set();
+  for(const r of RECORDS){
+    if(!byId.has(r.fairness_id)) byId.set(r.fairness_id,[]);
+    byId.get(r.fairness_id).push(r);
+    (r.target_pods||[]).forEach(p=>podset.add(p));
+    Object.keys(r.pod_state_at_dispatch||{}).forEach(p=>podset.add(p));
+  }
+  for(const [id,recs] of byId){
+    recs.sort((a,b)=>a.ts_received_ms-b.ts_received_ms);
+    PROGRAMS.set(id,{id,records:recs,stats:computeProgramStats(recs)});
+  }
+  ALL_PODS=[...podset].sort();
+  POD_INDEX=new Map(ALL_PODS.map((p,i)=>[p,i]));
+}
+
+/* ---------- inline SVG charts ----------
+   Fixed viewBox coordinate space (W x H), rendered with preserveAspectRatio
+   "none" for the plot geometry but with font-size given in viewBox units scaled
+   so text stays legible. To avoid the horizontal text distortion that "none"
+   causes, we render at a wide fixed viewBox and let the browser scale uniformly
+   via width:100% + height:auto is not possible with "none"; instead we compute a
+   left gutter wide enough for labels and keep a generous viewBox. Charts register
+   their data so a shared pointer handler can draw a crosshair + tooltip. */
+let CHART_SEQ=0;
+const CHART_REG=new Map();   // chartId -> {series, xmin,xmax,ymin,ymax, plot:{x,y,w,h}, W,H, xfmt,yfmt, ptfmt}
+
+function niceTicks(min,max,n){
+  const span=max-min||1, raw=span/n, mag=Math.pow(10,Math.floor(Math.log10(raw)));
+  const norm=raw/mag, step=(norm<1.5?1:norm<3?2:norm<7?5:10)*mag;
+  const start=Math.ceil(min/step)*step, out=[];
+  for(let v=start; v<=max+step*0.001; v+=step) out.push(v);
+  return out;
+}
+
+function svgLine(series, opts={}){
+  series=series.filter(s=>s.points&&s.points.length);
+  const xs=[], ys=[];
+  series.forEach(s=>s.points.forEach(([x,y])=>{xs.push(x);ys.push(y);}));
+  if(!xs.length) return '<div style="color:var(--muted);padding:20px 0">no data</div>';
+  const xmin=Math.min(...xs), xmax=Math.max(...xs);
+  const ymin=0, ymax=opts.ymax||Math.max(...ys)*1.12||1;
+
+  const H=opts.h||190, W=1000;                 // viewBox width; geometry stretches to container
+  const yfmt=opts.yfmt||(v=>fmtInt(v));
+  const yticks=(opts.ymax? [0,0.25,0.5,0.75,1].map(f=>ymin+(ymax-ymin)*f) : niceTicks(ymin,ymax,4)).filter(v=>v<=ymax+1e-9);
+  const maxLbl=Math.max(...yticks.map(v=>yfmt(v).length));
+  // gutters are CSS pixels (HTML overlay); the SVG plot area is inset by the same amounts.
+  const padL=Math.max(40, 12+maxLbl*8), padR=14, padT=10, padB=22;
+  // plot fractions inside the SVG viewBox (0..1) so overlay labels align with geometry
+  const fx0=padL, fx1='calc(100% - '+padR+'px)';
+  const sx=x=> (xmax===xmin?0:(x-xmin)/(xmax-xmin));            // 0..1 across plot
+  const sy=y=> 1-(ymax===ymin?0:(y-ymin)/(ymax-ymin));          // 0..1 top-down
+  // SVG uses a 0..1000 x space and 0..H y space, but plot region is inset via transform in px via CSS overlay.
+  // Simplest: draw geometry in a nested SVG whose own viewBox is the plot rect, positioned by CSS.
+  const gridLines=yticks.map(v=>{ const yf=sy(v);
+    return `<line x1="0" x2="1000" y1="${(yf*1000).toFixed(1)}" y2="${(yf*1000).toFixed(1)}" stroke="var(--grid)" stroke-width="1" vector-effect="non-scaling-stroke"/>`;}).join('');
+  const paths=series.map(s=>{
+    const d=s.points.map(([x,y],i)=>`${i?'L':'M'}${(sx(x)*1000).toFixed(2)},${(sy(y)*1000).toFixed(2)}`).join('');
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  }).join('');
+  const xf=opts.xfmt||(v=>v);
+
+  const id='chart'+(CHART_SEQ++);
+  CHART_REG.set(id,{series,xmin,xmax,ymin,ymax,padL,padR,padT,padB,H,xfmt:xf,yfmt,ptfmt:opts.ptfmt||yfmt,sx,sy});
+
+  // HTML overlay for y-labels (left gutter) and x-labels (bottom); SVG holds only geometry so text never distorts.
+  const yLabels=yticks.map(v=>{ const topPx=padT+sy(v)*(H-padT-padB);
+    return `<div class="ylab" style="top:${topPx.toFixed(1)}px">${yfmt(v)}</div>`;}).join('');
+  return `<div class="linechart" data-chart="${id}" style="position:relative;height:${H}px">
+    <div class="ylabs" style="width:${padL}px">${yLabels}</div>
+    <div class="plotbox" style="left:${padL}px;right:${padR}px;top:${padT}px;bottom:${padB}px">
+      <svg viewBox="0 0 1000 1000" width="100%" height="100%" preserveAspectRatio="none"
+           onpointermove="chartHover(event,'${id}')" onpointerleave="chartLeave('${id}')">
+        ${gridLines}${paths}
+        <g class="cross" style="display:none">
+          <line class="cx" y1="0" y2="1000" stroke="var(--baseline)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        </g>
+      </svg>
+    </div>
+    <div class="xlab xl0" style="left:${padL}px">${xf(xmin)}</div>
+    <div class="xlab xl1" style="right:${padR}px">${xf(xmax)}</div>
+    <div class="charttip" style="display:none"></div>
+  </div>`;
+}
+
+function chartHover(ev,id){
+  const c=CHART_REG.get(id); if(!c) return;
+  const svg=ev.currentTarget;
+  const box=svg.getBoundingClientRect();               // the plot rect in px
+  const frac=(ev.clientX-box.left)/box.width;
+  if(frac<0||frac>1){ chartLeave(id); return; }
+  const xval=c.xmin+(c.xmax-c.xmin)*frac;
+  const wrap=svg.closest('.linechart');
+  const vx=frac*1000;                                  // x in SVG 0..1000 space
+  const cross=svg.querySelector('.cross'); cross.style.display='';
+  cross.querySelector('.cx').setAttribute('x1',vx.toFixed(1)); cross.querySelector('.cx').setAttribute('x2',vx.toFixed(1));
+  cross.querySelectorAll('circle').forEach(n=>n.remove());
+  const rows=c.series.map(s=>{
+    let best=s.points[0], bd=Infinity;
+    for(const p of s.points){ const d=Math.abs(p[0]-xval); if(d<bd){bd=d;best=p;} }
+    const vy=c.sy(best[1])*1000;
+    const circle=document.createElementNS('http://www.w3.org/2000/svg','circle');
+    circle.setAttribute('cx',vx.toFixed(1)); circle.setAttribute('cy',vy.toFixed(1)); circle.setAttribute('r',7);
+    circle.setAttribute('fill',s.color); circle.setAttribute('stroke','var(--surface-1)'); circle.setAttribute('stroke-width','3');
+    circle.setAttribute('vector-effect','non-scaling-stroke');
+    cross.appendChild(circle);
+    return {name:s.name,color:s.color,val:best[1],x:best[0]};
+  });
+  const tip=wrap.querySelector('.charttip');
+  tip.innerHTML=`<div class="tt-x">${c.xfmt(rows[0].x)}</div>`+rows.map(r=>
+    `<div class="tt-row"><span class="tt-sw" style="background:${r.color}"></span>${r.name}<b>${c.ptfmt(r.val)}</b></div>`).join('');
+  tip.style.display='block';
+  const wrapBox=wrap.getBoundingClientRect();
+  const cursorX=ev.clientX-wrapBox.left;
+  const left=Math.min(wrapBox.width-tip.offsetWidth-6, Math.max(4, cursorX+14));
+  tip.style.left=left+'px'; tip.style.top='4px';
+}
+function chartLeave(id){
+  const wrap=document.querySelector(`.linechart[data-chart="${id}"]`); if(!wrap) return;
+  const cross=wrap.querySelector('.cross'); if(cross){cross.style.display='none'; cross.querySelectorAll('circle').forEach(n=>n.remove());}
+  const tip=wrap.querySelector('.charttip'); if(tip) tip.style.display='none';
+}
+window.chartHover=chartHover; window.chartLeave=chartLeave;
+
+function svgBars(items, opts={}){
+  const rowH=opts.rowH||26, W=1000, labW=opts.labW||160, valW=70;
+  const H=items.length*rowH, maxV=Math.max(1,...items.map(i=>i.value));
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">` +
+    items.map((it,i)=>{
+      const y=i*rowH, bw=Math.max(2,(W-labW-valW)*(it.value/maxV));
+      return `<text x="4" y="${y+rowH/2+5}" font-size="13" fill="var(--text-secondary)" font-family="ui-monospace,monospace">${it.label}</text>
+        <rect x="${labW}" y="${y+5}" width="${bw.toFixed(1)}" height="${rowH-10}" rx="3" fill="${it.color||'var(--series-1)'}"/>
+        <text x="${(labW+bw+8).toFixed(1)}" y="${y+rowH/2+5}" font-size="13" fill="var(--text-secondary)">${opts.vfmt?opts.vfmt(it.value):it.value}</text>`;
+    }).join('') + `</svg>`;
+}
+
+/* time-bucketed pool series: concurrency, arrivals, per-pod kv */
+function poolTimeSeries(nbuckets=120){
+  const tmin=Math.min(...RECORDS.map(r=>r.ts_received_ms));
+  const tmax=Math.max(...RECORDS.map(r=>r.ts_complete_ms));
+  const span=Math.max(1,tmax-tmin), bw=span/nbuckets;
+  const arrivals=new Array(nbuckets).fill(0);
+  // concurrency via sweep, sampled per bucket
+  const ev=[]; for(const r of RECORDS){ ev.push([r.ts_received_ms,1]); ev.push([r.ts_complete_ms,-1]); }
+  ev.sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+  const conc=new Array(nbuckets).fill(0); let cur=0, ei=0;
+  for(let b=0;b<nbuckets;b++){
+    const edge=tmin+(b+1)*bw;
+    let peakInBucket=cur;
+    while(ei<ev.length && ev[ei][0]<edge){ cur+=ev[ei][1]; if(cur>peakInBucket)peakInBucket=cur; ei++; }
+    conc[b]=peakInBucket;
+  }
+  for(const r of RECORDS){ const b=Math.min(nbuckets-1,Math.floor((r.ts_received_ms-tmin)/bw)); arrivals[b]++; }
+  // per-pod kv util avg per bucket (from dispatch snapshots, keyed by dispatch time = ts_received)
+  const kvSum=ALL_PODS.map(()=>new Array(nbuckets).fill(0));
+  const kvN  =ALL_PODS.map(()=>new Array(nbuckets).fill(0));
+  for(const r of RECORDS){
+    const b=Math.min(nbuckets-1,Math.floor((r.ts_received_ms-tmin)/bw));
+    for(const [pod,st] of Object.entries(r.pod_state_at_dispatch||{})){
+      const pi=POD_INDEX.get(pod); if(pi==null)continue;
+      kvSum[pi][b]+=st.kv_util||0; kvN[pi][b]++;
+    }
+  }
+  const bx=b=>tmin+(b+0.5)*bw;
+  return {
+    tmin,tmax,bw,
+    conc: conc.map((v,b)=>[bx(b),v]),
+    arrivals: arrivals.map((v,b)=>[bx(b),v]),
+    kv: ALL_PODS.map((_,pi)=> kvSum[pi].map((s,b)=>[bx(b), kvN[pi][b]?s/kvN[pi][b]:0])),
+  };
+}
+
+/* ---------- pool overview ---------- */
+function renderOverview(){
+  selectedId=null; renderList();
+  const el=document.getElementById('mainPane');
+  const allRecs=RECORDS;
+  const ttft=allRecs.map(r=>r.ts_first_token_ms-r.ts_received_ms);
+  const e2e=allRecs.map(r=>r.ts_complete_ms-r.ts_received_ms);
+  const ts=poolTimeSeries();
+  const globalPeak=Math.max(...ts.conc.map(p=>p[1]));
+
+  // per-pod totals
+  const podReq=new Map(), podKvSum=new Map(), podKvN=new Map();
+  for(const r of allRecs){
+    const chosen=(r.target_pods&&r.target_pods[0])||r.target_endpoint;
+    podReq.set(chosen,(podReq.get(chosen)||0)+1);
+    for(const [pod,st] of Object.entries(r.pod_state_at_dispatch||{})){
+      podKvSum.set(pod,(podKvSum.get(pod)||0)+(st.kv_util||0)); podKvN.set(pod,(podKvN.get(pod)||0)+1);
+    }
+  }
+  const tile=(k,v,sub)=>`<div class="tile"><div class="k">${k}</div><div class="v">${v}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`;
+
+  const podBars = ALL_PODS.map((p,i)=>({label:POD_SHORT(p), value:podReq.get(p)||0, color:podColorVar(i)}));
+  const kvSeries = ts.kv.map((pts,i)=>({name:POD_SHORT(ALL_PODS[i]), color:podColorVar(i), points:pts}));
+  const kvLegend = ALL_PODS.map((p,i)=>`<span><i class="swatch" style="background:${podColorVar(i)}"></i>${POD_SHORT(p)}</span>`).join('');
+
+  const podTable = ALL_PODS.map((p,i)=>{
+    const n=podReq.get(p)||0, share=allRecs.length?n/allRecs.length:0;
+    const kv=podKvN.get(p)?podKvSum.get(p)/podKvN.get(p):null;
+    return `<tr>
+      <td><i class="swatch" style="background:${podColorVar(i)};margin-right:6px"></i><span class="podname">${POD_SHORT(p)}</span></td>
+      <td>${fmtInt(n)}</td><td>${fmtPct(share)}</td>
+      <td>${kv==null?'—':`<span class="kvbar"><i style="width:${Math.min(100,kv*100).toFixed(1)}%;background:${kvColor(kv)}"></i></span> ${fmtPct(kv)}`}</td>
+    </tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="crumbs"><b>Pool overview</b><span class="sep">·</span><span style="color:var(--muted)">all programs</span></div>
+    <div class="section">
+      <div class="tiles">
+        ${tile('Requests', fmtInt(allRecs.length))}
+        ${tile('Programs', fmtInt(PROGRAMS.size))}
+        ${tile('Pods', ALL_PODS.length)}
+        ${tile('Peak concurrency', globalPeak, 'pool-wide in-flight')}
+        ${tile('Avg TTFT', fmtMs(mean(ttft)), 'p95 '+fmtMs(pct(ttft,95)))}
+        ${tile('Avg end-to-end', fmtMs(mean(e2e)), 'p95 '+fmtMs(pct(e2e,95)))}
+        ${tile('Input tokens', fmtInt(sum(allRecs.map(r=>r.input_tokens))))}
+        ${tile('Output tokens', fmtInt(sum(allRecs.map(r=>r.output_tokens))))}
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="section card">
+        <h2>Pool concurrency over time <span class="light">(max in-flight per bucket)</span></h2>
+        ${svgLine([{name:'concurrency',color:'var(--series-1)',points:ts.conc}], {h:170, xfmt:hms})}
+      </div>
+      <div class="section card">
+        <h2>Arrivals over time <span class="light">(requests received per bucket)</span></h2>
+        ${svgLine([{name:'arrivals',color:'var(--series-2)',points:ts.arrivals}], {h:170, xfmt:hms})}
+      </div>
+    </div>
+    <div class="section card">
+      <h2>Per-pod KV utilization over time <span class="light">(from dispatch snapshots)</span></h2>
+      <div class="legend">${kvLegend}</div>
+      ${svgLine(kvSeries, {h:190, ymax:1, xfmt:hms, yfmt:v=>Math.round(v*100)+'%'})}
+    </div>
+    <div class="grid2">
+      <div class="section card">
+        <h2>Requests per pod</h2>
+        ${svgBars(podBars, {rowH:26, labW:150, vfmt:fmtInt})}
+      </div>
+      <div class="section">
+        <h2>Pod summary</h2>
+        <table>
+          <thead><tr><th>Pod</th><th>Requests</th><th>Share</th><th>Avg KV util</th></tr></thead>
+          <tbody>${podTable}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="section">
+      <h2>Top programs by request count</h2>
+      <table>
+        <thead><tr><th>Program</th><th>Requests</th><th>Peak conc</th><th>Avg TTFT</th><th>Avg E2E</th><th>Out tokens</th></tr></thead>
+        <tbody>${[...PROGRAMS.values()].sort((a,b)=>b.stats.count-a.stats.count).slice(0,15).map(p=>`
+          <tr style="cursor:pointer" onclick="selectProgram('${p.id}')">
+            <td class="mono">${p.id}</td><td>${p.stats.count}</td><td>${p.stats.peakConc}</td>
+            <td>${fmtMs(p.stats.ttftAvg)}</td><td>${fmtMs(p.stats.e2eAvg)}</td><td>${fmtInt(p.stats.outTot)}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+/* ---------- program detail ---------- */
+function selectProgram(id){
+  selectedId=id; renderList();
+  const p=PROGRAMS.get(id); const s=p.stats;
+  const el=document.getElementById('mainPane');
+  const tile=(k,v,sub)=>`<div class="tile"><div class="k">${k}</div><div class="v">${v}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`;
+
+  // per-request timeline (in/out tokens, ttft) indexed by arrival order
+  const tmin=s.firstTs;
+  const ttftPts=p.records.map(r=>[r.ts_received_ms,r.ts_first_token_ms-r.ts_received_ms]);
+  const e2ePts =p.records.map(r=>[r.ts_received_ms,r.ts_complete_ms-r.ts_received_ms]);
+  const outPts =p.records.map(r=>[r.ts_received_ms,r.output_tokens]);
+  const inPts  =p.records.map(r=>[r.ts_received_ms,r.input_tokens]);
+
+  const podRows=ALL_PODS.map((pod,i)=>{
+    const n=s.podCount.get(pod)||0, share=s.count?n/s.count:0, kv=s.podKv[pod];
+    return `<tr>
+      <td><i class="swatch" style="background:${podColorVar(i)};margin-right:6px"></i><span class="podname">${POD_SHORT(pod)}</span> ${n>0?'<span class="chip chosen">chosen</span>':''}</td>
+      <td>${fmtInt(n)}</td><td>${fmtPct(share)}</td>
+      <td>${kv==null?'—':`<span class="kvbar"><i style="width:${Math.min(100,kv*100).toFixed(1)}%;background:${kvColor(kv)}"></i></span> ${fmtPct(kv)}`}</td>
+    </tr>`;
+  }).join('');
+
+  const shown=p.records.slice(0,500);
+  SHOWN=shown; SEL_REQ=null; REQ_MODE='flat';
+  const g=computeGroups(shown); GROUPS=g.groups; SINGLES=g.singles; OVERLAP=g.overlap;
+  const multiGroups=GROUPS.length;
+
+  el.innerHTML = `
+    <div class="crumbs"><a onclick="renderOverview()">Pool overview</a><span class="sep">/</span><b>Program</b></div>
+    <div class="section">
+      <div style="font-family:ui-monospace,monospace;font-size:13px;word-break:break-all">${p.id}</div>
+      <div class="sub" style="color:var(--muted);margin-top:4px">
+        ${p.records[0].incoming_model} · priority ${p.records[0].priority} ·
+        ${hms(s.firstTs)} → ${hms(s.lastTs)}
+      </div>
+    </div>
+    <div class="section">
+      <div class="tiles">
+        ${tile('Requests', fmtInt(s.count))}
+        ${tile('Peak concurrency', s.peakConc, 'own overlapping reqs')}
+        ${tile('Avg TTFT', fmtMs(s.ttftAvg), 'p95 '+fmtMs(s.ttftP95))}
+        ${tile('Avg end-to-end', fmtMs(s.e2eAvg), 'p95 '+fmtMs(s.e2eP95))}
+        ${tile('Avg decode', fmtMs(s.decodeAvg), 'complete − first token')}
+        ${tile('Input tokens', fmtInt(s.inTot), 'avg '+Math.round(s.inAvg)+'/req')}
+        ${tile('Output tokens', fmtInt(s.outTot), 'avg '+Math.round(s.outAvg)+'/req')}
+        ${tile('Prefix hit ratio', fmtPct(s.prefixAvg), 'cached '+fmtInt(s.cachedTot))}
+      </div>
+    </div>
+    <div class="grid2">
+      <div class="section card">
+        <h2>Latency per request <span class="light">(over arrival time)</span></h2>
+        <div class="legend"><span><i class="swatch" style="background:var(--series-1)"></i>TTFT</span><span><i class="swatch" style="background:var(--series-6)"></i>end-to-end</span></div>
+        ${svgLine([{name:'ttft',color:'var(--series-1)',points:ttftPts},{name:'e2e',color:'var(--series-6)',points:e2ePts}], {h:170, xfmt:hms, yfmt:v=>Math.round(v)+'ms'})}
+      </div>
+      <div class="section card">
+        <h2>Tokens per request <span class="light">(over arrival time)</span></h2>
+        <div class="legend"><span><i class="swatch" style="background:var(--series-2)"></i>input</span><span><i class="swatch" style="background:var(--series-3)"></i>output</span></div>
+        ${svgLine([{name:'in',color:'var(--series-2)',points:inPts},{name:'out',color:'var(--series-3)',points:outPts}], {h:170, xfmt:hms})}
+      </div>
+    </div>
+    <div class="section">
+      <h2>Per-pod distribution</h2>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--good)"></i>chosen = received requests from this program</span>
+        <span><i class="swatch" style="background:var(--seq-400)"></i>avg KV util across this program's dispatch snapshots</span>
+      </div>
+      <table><thead><tr><th>Pod</th><th>Requests</th><th>Share</th><th>Avg KV util @ dispatch</th></tr></thead><tbody>${podRows}</tbody></table>
+    </div>
+    <div class="section">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+        <h2 style="margin:0">Requests ${shown.length<p.records.length?`<span class="light">(first ${shown.length} of ${p.records.length})</span>`:''}</h2>
+        <div class="segmented" style="margin-left:auto">
+          <button class="seg active" id="segFlat" onclick="setReqMode('flat')">Flat</button>
+          <button class="seg" id="segGroups" onclick="setReqMode('groups')">Concurrent groups${multiGroups?` <span class="segbadge">${multiGroups}</span>`:''}</button>
+        </div>
+      </div>
+      <div id="reqTableHost"></div>
+      <div id="reqPanel" class="reqpanel" style="display:none"></div>
+    </div>`;
+
+  renderReqTable();
+}
+
+/* ---------- requests table (flat or grouped) + detail panel ---------- */
+function reqRowHTML(i, rowid){
+  const r=SHOWN[i];
+  const ttft=r.ts_first_token_ms-r.ts_received_ms, e2e=r.ts_complete_ms-r.ts_received_ms;
+  const chosen=(r.target_pods&&r.target_pods[0])||'';
+  return `<tr class="req ${i===SEL_REQ?'sel':''}" data-req="${i}" id="${rowid||('reqrow-'+i)}" onclick="selectRequest(${i})" title="Click for dispatch snapshot">
+    <td class="mono">${new Date(r.ts_received_ms).toISOString().substr(11,12)}</td>
+    <td class="mono">${r.request_id.slice(0,8)}</td>
+    <td>${r.input_tokens}</td><td>${r.output_tokens}</td><td>${r.cached_tokens}</td>
+    <td>${fmtPct(r.prefix_hit_ratio||0)}</td><td>${fmtMs(ttft)}</td><td>${fmtMs(e2e)}</td>
+    <td><span class="podname">${POD_SHORT(chosen)}</span></td></tr>`;
+}
+const REQ_HEAD=`<thead><tr><th>Received</th><th>Req id</th><th>In</th><th>Out</th><th>Cached</th><th>Prefix hit</th><th>TTFT</th><th>E2E</th><th>Chosen pod</th></tr></thead>`;
+
+function renderReqTable(){
+  const host=document.getElementById('reqTableHost'); if(!host) return;
+  document.getElementById('segFlat').classList.toggle('active', REQ_MODE==='flat');
+  document.getElementById('segGroups').classList.toggle('active', REQ_MODE==='groups');
+
+  if(REQ_MODE==='flat'){
+    const rows=SHOWN.map((_,i)=>reqRowHTML(i)).join('');
+    host.innerHTML=`<div class="reqwrap"><table>${REQ_HEAD}<tbody>${rows}</tbody></table></div>`;
+    highlightSelected(); return;
+  }
+  // grouped: each concurrency window (>=2 simultaneously in flight), largest peak first.
+  const order=[...GROUPS.keys()].sort((a,b)=> (GROUPS[b].peak-GROUPS[a].peak) || (GROUPS[a].start-GROUPS[b].start));
+  const winBlocks=order.map((gi,ord)=>{
+    const gr=GROUPS[gi], span=gr.end-gr.start;
+    const rows=gr.members.map(i=>reqRowHTML(i, `wr-${ord}-${i}`)).join('');
+    return `<div class="groupblock multi">
+      <div class="grouphdr">
+        <span class="chip conc">peak ${gr.peak} concurrent</span>
+        <span style="color:var(--muted)">${gr.members.length} request${gr.members.length>1?'s':''} in flight · span ${fmtMs(span)} · ${hms(gr.start)} → ${hms(gr.end)}</span>
+      </div>
+      <div class="reqwrap" style="max-height:none;border:none;border-radius:0"><table>${REQ_HEAD}<tbody>${rows}</tbody></table></div>
+    </div>`;
+  }).join('');
+  const singleBlock = SINGLES.length ? `<div class="groupblock">
+      <div class="grouphdr"><span style="color:var(--muted)">${SINGLES.length} request${SINGLES.length>1?'s':''} that never overlapped another (ran alone)</span></div>
+      <div class="reqwrap" style="max-height:none;border:none;border-radius:0"><table>${REQ_HEAD}<tbody>${SINGLES.map(i=>reqRowHTML(i,`sr-${i}`)).join('')}</tbody></table></div>
+    </div>` : '';
+  const empty = GROUPS.length ? '' : `<div class="grouphdr"><span style="color:var(--muted)">No concurrency windows — this program's requests never overlapped each other.</span></div>`;
+  host.innerHTML=`<div class="groupscroll">${empty}${winBlocks}${singleBlock}</div>`;
+  highlightSelected();
+}
+
+function setReqMode(mode){ REQ_MODE=mode; renderReqTable(); }
+
+function highlightSelected(){
+  document.querySelectorAll('tr.req.sel').forEach(t=>t.classList.remove('sel'));
+  if(SEL_REQ!=null) document.querySelectorAll(`tr.req[data-req="${SEL_REQ}"]`).forEach(t=>t.classList.add('sel'));
+}
+/* detail panel below the table: request fields + pod-state-at-dispatch + concurrent group */
+function requestDetailHTML(i){
+  const r=SHOWN[i];
+  const chosen=(r.target_pods&&r.target_pods[0])||'';
+  const ttft=r.ts_first_token_ms-r.ts_received_ms, e2e=r.ts_complete_ms-r.ts_received_ms, dec=r.ts_complete_ms-r.ts_first_token_ms;
+  const kv=(label,val)=>`<div><span>${label}</span><b>${val}</b></div>`;
+
+  const ps=r.pod_state_at_dispatch||{};
+  const pods=[...new Set([...Object.keys(ps), ...(r.target_pods||[])])].sort();
+  const podRows=pods.map(pod=>{
+    const st=ps[pod]||{}, isChosen=pod===chosen, kvu=st.kv_util;
+    return `<tr class="${isChosen?'chosenpod':''}">
+      <td><span class="podname">${POD_SHORT(pod)}</span> ${isChosen?'<span class="chip chosen">chosen</span>':''}</td>
+      <td>${kvu==null?'—':`<span class="kvbar"><i style="width:${Math.min(100,kvu*100).toFixed(1)}%;background:${kvColor(kvu)}"></i></span> ${fmtPct(kvu)}`}</td>
+      <td>${st.queue_size==null?'—':st.queue_size}</td>
+      <td>${st.running_requests==null?'—':st.running_requests}</td>
+      <td>${st.prefix_match_blocks==null?'—':st.prefix_match_blocks}</td>
+    </tr>`;
+  }).join('');
+
+  // concurrent group: the requests that were actually in flight at the same time
+  // as this one (their intervals overlap this request's [received, complete]).
+  const others=(OVERLAP[i]||[]);
+  const members=[i, ...others].sort((a,b)=>SHOWN[a].ts_received_ms-SHOWN[b].ts_received_ms);
+  let groupHTML;
+  if(others.length===0){
+    groupHTML=`<div style="color:var(--muted);font-size:12px">No overlapping requests — this request ran alone.</div>`;
+  } else {
+    const rows=members.map(m=>{
+      const o=SHOWN[m], oe2e=o.ts_complete_ms-o.ts_received_ms, isThis=m===i;
+      return `<tr class="${isThis?'chosenpod':''}" ${isThis?'':`onclick="selectRequest(${m})" style="cursor:pointer"`}>
+        <td class="mono">${o.request_id.slice(0,8)}${isThis?' <span class="chip conc">this</span>':''}</td>
+        <td class="mono">${new Date(o.ts_received_ms).toISOString().substr(11,12)}</td>
+        <td class="mono">${new Date(o.ts_complete_ms).toISOString().substr(11,12)}</td>
+        <td>${fmtMs(oe2e)}</td>
+        <td><span class="podname">${POD_SHORT((o.target_pods&&o.target_pods[0])||'')}</span></td></tr>`;
+    }).join('');
+    groupHTML=`<table>
+      <thead><tr><th>Req id</th><th>Received</th><th>Complete</th><th>E2E</th><th>Chosen pod</th></tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+  const grpCount=others.length+1;
+
+  return `<div class="reqdetail">
+    <div class="paneltop">
+      <h4 style="margin:0">Request detail</h4>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <span class="light" style="font-size:11px">Panel size</span>
+        <div class="segmented">
+          <button class="seg ${PANEL_SIZE==='s'?'active':''}" onclick="setPanelSize('s')">S</button>
+          <button class="seg ${PANEL_SIZE==='m'?'active':''}" onclick="setPanelSize('m')">M</button>
+          <button class="seg ${PANEL_SIZE==='l'?'active':''}" onclick="setPanelSize('l')">L</button>
+          <button class="seg ${PANEL_SIZE==='full'?'active':''}" onclick="setPanelSize('full')">Full</button>
+        </div>
+        <button class="btn" style="padding:3px 10px" onclick="closeReqPanel()">Close</button>
+      </div>
+    </div>
+    <div class="kv">
+      ${kv('Request id', `<span style="font-family:ui-monospace,monospace">${r.request_id}</span>`)}
+      ${kv('Received', new Date(r.ts_received_ms).toISOString().substr(11,12))}
+      ${kv('TTFT (gateway)', fmtMs(ttft))}
+      ${kv('End-to-end', fmtMs(e2e))}
+      ${kv('Decode', fmtMs(dec))}
+      ${kv('Input tokens', fmtInt(r.input_tokens))}
+      ${kv('Output tokens', fmtInt(r.output_tokens))}
+      ${kv('Cached tokens', fmtInt(r.cached_tokens))}
+      ${kv('Prefix hit', `${fmtPct(r.prefix_hit_ratio||0)} (${r.prefix_hit_blocks}/${r.prefix_total_blocks} blk)`)}
+      ${kv('Chosen pod', `<span class="podname">${POD_SHORT(chosen)}</span>`)}
+    </div>
+    <h4>Pod state at dispatch <span class="light" style="text-transform:none;letter-spacing:0">(all candidates; chosen highlighted)</span></h4>
+    <table>
+      <thead><tr><th>Pod</th><th>KV util</th><th>Queue</th><th>Running</th><th>Prefix match blk</th></tr></thead>
+      <tbody>${podRows}</tbody>
+    </table>
+    <h4>Overlapping requests <span class="light" style="text-transform:none;letter-spacing:0">(${grpCount} request${grpCount>1?'s':''} in flight together${others.length?'; click a row to inspect it':''})</span></h4>
+    ${groupHTML}
+  </div>`;
+}
+
+function selectRequest(i){
+  SEL_REQ=i;
+  highlightSelected();
+  const panel=document.getElementById('reqPanel');
+  if(!panel) return;
+  panel.innerHTML=requestDetailHTML(i);
+  panel.style.display='block';
+  panel.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+function closeReqPanel(){
+  SEL_REQ=null; highlightSelected();
+  const panel=document.getElementById('reqPanel'); if(panel){panel.style.display='none'; panel.innerHTML='';}
+}
+
+window.selectProgram = selectProgram;
+window.renderOverview = renderOverview;
+window.selectRequest = selectRequest;
+window.setReqMode = setReqMode;
+window.closeReqPanel = closeReqPanel;
+
+/* ---------- left list ---------- */
+function renderList(){
+  const q=document.getElementById('searchBox').value.trim().toLowerCase();
+  const minReq=+document.getElementById('minReq').value;
+  const maxReq=+document.getElementById('maxReq').value;
+  const minConc=+document.getElementById('maxConc').value;
+  const sortBy=document.getElementById('sortBy').value;
+  let items=[...PROGRAMS.values()].filter(p=>p.stats.count>=minReq && (maxReq===0||p.stats.count<=maxReq) && p.stats.peakConc>=minConc && (!q||p.id.toLowerCase().includes(q)));
+  const cmp={ count:(a,b)=>b.stats.count-a.stats.count, maxconc:(a,b)=>b.stats.peakConc-a.stats.peakConc,
+    ttft:(a,b)=>b.stats.ttftAvg-a.stats.ttftAvg, e2e:(a,b)=>b.stats.e2eAvg-a.stats.e2eAvg,
+    out:(a,b)=>b.stats.outTot-a.stats.outTot, id:(a,b)=>a.id.localeCompare(b.id) }[sortBy];
+  items.sort(cmp);
+  const maxCount=Math.max(1,...items.map(p=>p.stats.count));
+  document.getElementById('progList').innerHTML=items.map(p=>`
+    <div class="progrow ${p.id===selectedId?'sel':''}" data-id="${p.id}">
+      <span class="pid" title="${p.id}">${p.id}</span><span class="cnt">${p.stats.count}</span>
+      <span class="bar"><i style="width:${(p.stats.count/maxCount*100).toFixed(1)}%"></i></span></div>`).join('');
+  document.getElementById('listCount').textContent=`${items.length} / ${PROGRAMS.size}`;
+  document.querySelectorAll('.progrow').forEach(row=>row.addEventListener('click',()=>selectProgram(row.dataset.id)));
+}
+
+/* ---------- load / boot ---------- */
+function ingest(text){
+  RECORDS = text.split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{try{return JSON.parse(l);}catch(e){return null;}}).filter(Boolean);
+  if(!RECORDS.length){ alert('No valid JSON records found in file.'); return; }
+  buildPrograms();
+  const counts=[...PROGRAMS.values()].map(p=>p.stats.count);
+  const concs=[...PROGRAMS.values()].map(p=>p.stats.peakConc);
+  document.getElementById('minReq').max=Math.max(1,...counts);
+  document.getElementById('maxReq').max=Math.max(1,...counts);
+  document.getElementById('maxConc').max=Math.max(1,...concs);
+  const tsMin=Math.min(...RECORDS.map(r=>r.ts_received_ms)), tsMax=Math.max(...RECORDS.map(r=>r.ts_received_ms));
+  document.getElementById('globalMeta').textContent=`${fmtInt(RECORDS.length)} requests · ${PROGRAMS.size} programs · ${ALL_PODS.length} pods · ${((tsMax-tsMin)/60000).toFixed(1)} min window`;
+  document.getElementById('welcome').style.display='none';
+  document.getElementById('app').style.display='grid';
+  const rerender=()=>{ document.getElementById('minReqVal').textContent=document.getElementById('minReq').value;
+    const mrx=+document.getElementById('maxReq').value; document.getElementById('maxReqVal').textContent=mrx===0?'any':'≤ '+mrx;
+    const mcv=+document.getElementById('maxConc').value; document.getElementById('maxConcVal').textContent=mcv===0?'any':'≥ '+mcv; renderList(); };
+  ['searchBox','minReq','maxReq','maxConc','sortBy'].forEach(id=>document.getElementById(id).oninput=rerender);
+  rerender(); renderOverview();
+}
+function loadFile(file){ const r=new FileReader(); r.onload=e=>ingest(e.target.result); r.readAsText(file); }
+
+// upload wiring
+const fi=document.getElementById('fileInput');
+document.getElementById('uploadBtn').onclick=()=>fi.click();
+document.getElementById('uploadCard').onclick=()=>fi.click();
+fi.onchange=e=>{ if(e.target.files[0]) loadFile(e.target.files[0]); };
+document.getElementById('overviewBtn').onclick=renderOverview;
+// drag & drop
+const dz=document.getElementById('dropzone');
+['dragenter','dragover'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault();dz.classList.add('show');}));
+['dragleave','drop'].forEach(ev=>window.addEventListener(ev,e=>{e.preventDefault(); if(ev==='drop'||e.relatedTarget===null)dz.classList.remove('show');}));
+window.addEventListener('drop',e=>{e.preventDefault();dz.classList.remove('show'); if(e.dataTransfer.files[0])loadFile(e.dataTransfer.files[0]);});
+
+// try auto-load records.jsonl next to this file (works when served over HTTP)
+(async()=>{
+  try{ const res=await fetch('records.jsonl'); if(res.ok){ ingest(await res.text()); return; } }catch(e){}
+  document.getElementById('welcome').style.display='block';
+})();
+</script>
+</body>
+</html>
