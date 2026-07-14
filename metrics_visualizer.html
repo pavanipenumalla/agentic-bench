@@ -396,6 +396,14 @@ td.mono { font-family: 'SF Mono', 'Fira Code', monospace; }
       <div class="chart-wrap"><canvas id="chart-pool-ready"></canvas></div>
     </div>
     <div class="card">
+      <h3>Waiting queue over time (per pod)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-queue-pod"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Running requests over time (per pod)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-running-pod"></canvas></div>
+    </div>
+    <div class="card">
       <h3>Prefix cache hit ratio over time (per plugin)</h3>
       <div class="chart-wrap"><canvas id="chart-pool-hitratio"></canvas></div>
     </div>
@@ -406,6 +414,18 @@ td.mono { font-family: 'SF Mono', 'Fira Code', monospace; }
     <div class="card">
       <h3>Cached prompt tokens, mean over time (per fairness_id)</h3>
       <div class="chart-wrap"><canvas id="chart-pool-cachedtok"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Prefix cache hit ratio over time (per pod)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-hitratio-pod"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Prefix cache hit bytes, mean over time (per pod)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-hitbytes-pod"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>Cached prompt tokens, mean over time (per pod)</h3>
+      <div class="chart-wrap"><canvas id="chart-pool-cachedtok-pod"></canvas></div>
     </div>
   </div>
 </div>
@@ -429,12 +449,21 @@ const STATE = {
   epQueueSize: {},
   epRunningReq: {},
   epReadyEp: {},
+  // endpoint per-pod time series (keyed by model_server_endpoint / pod name)
+  epPodKeys: [],       // sorted pod name strings
+  epPodQueueSize: {},  // pod -> Float32Array(N)
+  epPodRunningReq: {},
   // cache_metrics series — raw histogram sum/count per step (mean = sum/count)
   cachePlugins: [],    // sorted plugin_name strings
   cacheHitRatioSum: {}, cacheHitRatioCount: {},   // plugin -> Float32Array(N)
   cacheHitBytesSum: {}, cacheHitBytesCount: {},   // plugin -> Float32Array(N)
   cacheFids: [],       // sorted fairness_id strings
   cacheTokSum: {}, cacheTokCount: {},             // fid -> Float32Array(N)
+  // cache_metrics per-pod split (keyed by endpoint) — prefill and decode alike
+  cachePods: [],       // sorted endpoint strings
+  cachePodHitRatioSum: {}, cachePodHitRatioCount: {}, // endpoint -> Float32Array(N)
+  cachePodHitBytesSum: {}, cachePodHitBytesCount: {},
+  cachePodTokSum: {}, cachePodTokCount: {},
   pids: [],            // sorted pid strings
   pidIdx: {},          // pid -> column index
   pidData: {},         // metric name -> Float32Array(N * pids.length) flat
@@ -566,12 +595,16 @@ async function streamParseJsonl(file, onProgress) {
 
   // endpoint_pool growing storage: poolName -> {kv: [], qs: [], rr: [], re: []}
   const epStore = new Map();
+  // per-pod growing storage: podName -> {qs: [], rr: []}
+  const epPodStore = new Map();
 
   // cache_metrics growing storage:
   //   plugin_name -> {rsum: [], rcount: [], bsum: [], bcount: []}  (hit ratio + bytes)
   //   fairness_id -> {tsum: [], tcount: []}                        (cached tokens)
   const cachePluginStore = new Map();
   const cacheFidStore = new Map();
+  //   endpoint -> {rsum, rcount, bsum, bcount, tsum, tcount}          (per pod)
+  const cachePodStore = new Map();
 
   // pid -> {metric -> [values...]}
   const pidStore = new Map();
@@ -666,6 +699,21 @@ async function streamParseJsonl(file, onProgress) {
         }
       }
 
+      // per-pod endpoint signals (keyed by model_server_endpoint / pod name)
+      const pp_pod = ep.per_pod || {};
+      for (const [pod, pv] of Object.entries(pp_pod)) {
+        let e = epPodStore.get(pod);
+        if (!e) {
+          e = { qs: new Array(idx).fill(NaN), rr: new Array(idx).fill(NaN) };
+          epPodStore.set(pod, e);
+        }
+        e.qs.push(pv.queue_size ?? NaN);
+        e.rr.push(pv.running_requests ?? NaN);
+      }
+      for (const [pod, e] of epPodStore) {
+        if (!(pod in pp_pod)) { e.qs.push(NaN); e.rr.push(NaN); }
+      }
+
       // cache_metrics: prefix hit ratio/bytes per plugin, cached tokens per fid
       const cm = obj.cache_metrics || {};
       const hr = cm.prefix_hit_ratio || {};
@@ -692,6 +740,29 @@ async function streamParseJsonl(file, onProgress) {
       }
       for (const [fid, e] of cacheFidStore) {
         if (!(fid in ct)) { e.tsum.push(NaN); e.tcount.push(NaN); }
+      }
+
+      // per-pod split (keyed by endpoint) across all three cache metrics
+      const hrp = cm.prefix_hit_ratio_by_pod || {};
+      const hbp = cm.prefix_hit_bytes_by_pod || {};
+      const ctp = cm.cached_tokens_by_pod || {};
+      const cachePodNames = new Set([...Object.keys(hrp), ...Object.keys(hbp), ...Object.keys(ctp)]);
+      for (const pod of cachePodNames) {
+        let e = cachePodStore.get(pod);
+        if (!e) {
+          e = { rsum: new Array(idx).fill(NaN), rcount: new Array(idx).fill(NaN),
+                bsum: new Array(idx).fill(NaN), bcount: new Array(idx).fill(NaN),
+                tsum: new Array(idx).fill(NaN), tcount: new Array(idx).fill(NaN) };
+          cachePodStore.set(pod, e);
+        }
+        e.rsum.push(hrp[pod]?.sum ?? NaN);  e.rcount.push(hrp[pod]?.count ?? NaN);
+        e.bsum.push(hbp[pod]?.sum ?? NaN);  e.bcount.push(hbp[pod]?.count ?? NaN);
+        e.tsum.push(ctp[pod]?.sum ?? NaN);  e.tcount.push(ctp[pod]?.count ?? NaN);
+      }
+      for (const [pod, e] of cachePodStore) {
+        if (!cachePodNames.has(pod)) {
+          e.rsum.push(NaN); e.rcount.push(NaN); e.bsum.push(NaN); e.bcount.push(NaN); e.tsum.push(NaN); e.tcount.push(NaN);
+        }
       }
 
       // Per-program / per-flow / per-fairness_id
@@ -757,6 +828,14 @@ async function streamParseJsonl(file, onProgress) {
     STATE.epReadyEp[pname]   = Float32Array.from(e.re);
   }
 
+  STATE.epPodKeys = Array.from(epPodStore.keys()).sort();
+  STATE.epPodQueueSize = {}; STATE.epPodRunningReq = {};
+  for (const pod of STATE.epPodKeys) {
+    const e = epPodStore.get(pod);
+    STATE.epPodQueueSize[pod]  = Float32Array.from(e.qs);
+    STATE.epPodRunningReq[pod] = Float32Array.from(e.rr);
+  }
+
   // cache_metrics typed arrays
   STATE.cachePlugins = Array.from(cachePluginStore.keys()).sort();
   STATE.cacheHitRatioSum = {}; STATE.cacheHitRatioCount = {};
@@ -774,6 +853,19 @@ async function streamParseJsonl(file, onProgress) {
     const e = cacheFidStore.get(fid);
     STATE.cacheTokSum[fid]   = Float32Array.from(e.tsum);
     STATE.cacheTokCount[fid] = Float32Array.from(e.tcount);
+  }
+  STATE.cachePods = Array.from(cachePodStore.keys()).sort();
+  STATE.cachePodHitRatioSum = {}; STATE.cachePodHitRatioCount = {};
+  STATE.cachePodHitBytesSum = {}; STATE.cachePodHitBytesCount = {};
+  STATE.cachePodTokSum = {}; STATE.cachePodTokCount = {};
+  for (const pod of STATE.cachePods) {
+    const e = cachePodStore.get(pod);
+    STATE.cachePodHitRatioSum[pod]   = Float32Array.from(e.rsum);
+    STATE.cachePodHitRatioCount[pod] = Float32Array.from(e.rcount);
+    STATE.cachePodHitBytesSum[pod]   = Float32Array.from(e.bsum);
+    STATE.cachePodHitBytesCount[pod] = Float32Array.from(e.bcount);
+    STATE.cachePodTokSum[pod]        = Float32Array.from(e.tsum);
+    STATE.cachePodTokCount[pod]      = Float32Array.from(e.tcount);
   }
 
   const pids = Array.from(pidStore.keys());
@@ -816,6 +908,13 @@ function ingestCompact(obj) {
     STATE.epRunningReq[pname] = obj.epRunningReq && obj.epRunningReq[pname] ? Float32Array.from(obj.epRunningReq[pname]) : new Float32Array(STATE.N).fill(NaN);
     STATE.epReadyEp[pname]    = obj.epReadyEp    && obj.epReadyEp[pname]    ? Float32Array.from(obj.epReadyEp[pname])    : new Float32Array(STATE.N).fill(NaN);
   }
+  // per-pod endpoint series (compact files written before this feature have no epPod* keys)
+  STATE.epPodKeys = obj.epPodKeys || [];
+  STATE.epPodQueueSize = {}; STATE.epPodRunningReq = {};
+  for (const pod of STATE.epPodKeys) {
+    STATE.epPodQueueSize[pod]  = obj.epPodQueueSize  && obj.epPodQueueSize[pod]  ? Float32Array.from(obj.epPodQueueSize[pod])  : new Float32Array(STATE.N).fill(NaN);
+    STATE.epPodRunningReq[pod] = obj.epPodRunningReq && obj.epPodRunningReq[pod] ? Float32Array.from(obj.epPodRunningReq[pod]) : new Float32Array(STATE.N).fill(NaN);
+  }
   // cache_metrics (compact files written before this feature have no cache* keys)
   const hydrateMap = (keys, src) => {
     const out = {};
@@ -830,6 +929,13 @@ function ingestCompact(obj) {
   STATE.cacheFids = obj.cacheFids || [];
   STATE.cacheTokSum   = hydrateMap(STATE.cacheFids, obj.cacheTokSum);
   STATE.cacheTokCount = hydrateMap(STATE.cacheFids, obj.cacheTokCount);
+  STATE.cachePods = obj.cachePods || [];
+  STATE.cachePodHitRatioSum   = hydrateMap(STATE.cachePods, obj.cachePodHitRatioSum);
+  STATE.cachePodHitRatioCount = hydrateMap(STATE.cachePods, obj.cachePodHitRatioCount);
+  STATE.cachePodHitBytesSum   = hydrateMap(STATE.cachePods, obj.cachePodHitBytesSum);
+  STATE.cachePodHitBytesCount = hydrateMap(STATE.cachePods, obj.cachePodHitBytesCount);
+  STATE.cachePodTokSum   = hydrateMap(STATE.cachePods, obj.cachePodTokSum);
+  STATE.cachePodTokCount = hydrateMap(STATE.cachePods, obj.cachePodTokCount);
   STATE.pids = obj.pids;
   STATE.pidIdx = {};
   STATE.pids.forEach((pid, i) => STATE.pidIdx[pid] = i);
@@ -945,8 +1051,11 @@ function resetAll() {
   STATE.ts = STATE.fairness = STATE.pool = null;
   STATE.dispP50 = STATE.dispP99 = STATE.reqqP50 = STATE.reqqP99 = STATE.dispBuckets = null;
   STATE.epPoolKeys = []; STATE.epKvCache = {}; STATE.epQueueSize = {}; STATE.epRunningReq = {}; STATE.epReadyEp = {};
+  STATE.epPodKeys = []; STATE.epPodQueueSize = {}; STATE.epPodRunningReq = {};
   STATE.cachePlugins = []; STATE.cacheHitRatioSum = {}; STATE.cacheHitRatioCount = {}; STATE.cacheHitBytesSum = {}; STATE.cacheHitBytesCount = {};
   STATE.cacheFids = []; STATE.cacheTokSum = {}; STATE.cacheTokCount = {};
+  STATE.cachePods = []; STATE.cachePodHitRatioSum = {}; STATE.cachePodHitRatioCount = {}; STATE.cachePodHitBytesSum = {}; STATE.cachePodHitBytesCount = {};
+  STATE.cachePodTokSum = {}; STATE.cachePodTokCount = {};
   STATE.pids = []; STATE.N = 0;
   for (const k in STATE.charts) { try { STATE.charts[k].destroy(); } catch {} STATE.charts[k] = null; }
   document.getElementById('file-loader').classList.remove('hidden');
@@ -1422,8 +1531,8 @@ function renderPoolView() {
 
   const POOL_COLORS = ['#4361ee','#22c55e','#f59e0b','#ef4444','#9467bd','#17becf'];
 
-  const buildPoolDatasets = (getter) => {
-    return STATE.epPoolKeys.map((pname, idx) => {
+  const buildPoolDatasets = (getter, keys = STATE.epPoolKeys) => {
+    return keys.map((pname, idx) => {
       const arr = getter(pname);
       const d = downsample(arr);
       return {
@@ -1484,12 +1593,15 @@ function renderPoolView() {
     ['chart-pool-queue',   'poolQueue',   p => STATE.epQueueSize[p],   'avg_queue_size'],
     ['chart-pool-running', 'poolRunning', p => STATE.epRunningReq[p],  'avg_running_requests'],
     ['chart-pool-ready',   'poolReady',   p => STATE.epReadyEp[p],     'ready_endpoints'],
+    // per-pod (per model_server_endpoint) — one line per pod, prefill and decode alike
+    ['chart-pool-queue-pod',   'poolQueuePod',   p => STATE.epPodQueueSize[p],  'per_pod_queue_size',       STATE.epPodKeys],
+    ['chart-pool-running-pod', 'poolRunningPod', p => STATE.epPodRunningReq[p], 'per_pod_running_requests', STATE.epPodKeys],
   ];
-  for (const [canvasId, key, getter, yLabel] of slots) {
+  for (const [canvasId, key, getter, yLabel, keys] of slots) {
     if (STATE.charts[key]) STATE.charts[key].destroy();
     STATE.charts[key] = new Chart(document.getElementById(canvasId), {
       type: 'line',
-      data: { datasets: buildPoolDatasets(getter) },
+      data: { datasets: buildPoolDatasets(getter, keys ?? STATE.epPoolKeys) },
       options: baseOpts(yLabel),
     });
   }
@@ -1499,6 +1611,9 @@ function renderPoolView() {
     ['chart-pool-hitratio', 'poolHitRatio', STATE.cachePlugins, p => STATE.cacheHitRatioSum[p], p => STATE.cacheHitRatioCount[p], 'prefix_hit_ratio'],
     ['chart-pool-hitbytes', 'poolHitBytes', STATE.cachePlugins, p => STATE.cacheHitBytesSum[p], p => STATE.cacheHitBytesCount[p], 'mean_hit_bytes'],
     ['chart-pool-cachedtok','poolCachedTok',STATE.cacheFids,    f => STATE.cacheTokSum[f],      f => STATE.cacheTokCount[f],      'mean_cached_tokens'],
+    ['chart-pool-hitratio-pod', 'poolHitRatioPod', STATE.cachePods, p => STATE.cachePodHitRatioSum[p], p => STATE.cachePodHitRatioCount[p], 'prefix_hit_ratio'],
+    ['chart-pool-hitbytes-pod', 'poolHitBytesPod', STATE.cachePods, p => STATE.cachePodHitBytesSum[p], p => STATE.cachePodHitBytesCount[p], 'mean_hit_bytes'],
+    ['chart-pool-cachedtok-pod','poolCachedTokPod',STATE.cachePods, p => STATE.cachePodTokSum[p],      p => STATE.cachePodTokCount[p],      'mean_cached_tokens'],
   ];
   for (const [canvasId, key, keys, sumGetter, cntGetter, yLabel] of meanSlots) {
     if (STATE.charts[key]) STATE.charts[key].destroy();

@@ -29,12 +29,25 @@ source "${SCRIPT_DIR}/.env"
 NS="${NAMESPACE}"
 GUIDE_NAME="${GUIDE_NAME}"
 MODEL_DEPLOY="${MODEL_DEPLOY}"
+# EPP deployment/service name and container name. EPP_DEPLOY defaults to the
+# helm-derived "${GUIDE_NAME}-epp"; override in .env if they differ.
+EPP_DEPLOY="${EPP_DEPLOY:-${GUIDE_NAME}-epp}"
+EPP_CONTAINER="${EPP_CONTAINER:-epp}"
+# Optional: point the EPP at a specific image before the run (e.g. the dev
+# image with per-request records). Empty leaves the deployment's image as-is.
+EPP_IMAGE="${EPP_IMAGE:-}"
+# Enable the debug per-request record log (sets EPP_REQUEST_RECORDS=1 on the EPP
+# and drains /debug/request-records into ${strategy}/records). Default on.
+EPP_RECORDS="${EPP_RECORDS:-1}"
 INFERENCE_PERF_IMAGE="${INFERENCE_PERF_IMAGE}"
 INFERENCE_PERF_CONFIGMAP="inference-perf-config"
 SCRAPER_CONFIGMAP="epp-metrics-scraper"
-EPP_METRICS_URL="http://${GUIDE_NAME}-epp.${NS}.svc.cluster.local:9090/metrics"
+DRAINER_CONFIGMAP="epp-records-drainer"
+EPP_METRICS_URL="http://${EPP_DEPLOY}.${NS}.svc.cluster.local:9090/metrics"
+EPP_RECORDS_URL="http://${EPP_DEPLOY}.${NS}.svc.cluster.local:9090/debug/request-records"
 
 SCRAPER_SCRIPT="${SCRIPT_DIR}/scrape_metrics.py"
+DRAINER_SCRIPT="${SCRIPT_DIR}/drain_records.py"
 CONFIG_FILE="${SCRIPT_DIR}/config.yml"
 
 if [ $# -lt 1 ]; then
@@ -66,7 +79,7 @@ plugins:
 - type: prefix-cache-scorer
 - type: concurrency-detector
   parameters:
-    maxConcurrency: 140
+    maxConcurrency: 160
 - type: program-aware-fairness
   parameters:
     strategy: "las"
@@ -100,7 +113,7 @@ plugins:
 - type: prefix-cache-scorer
 - type: concurrency-detector
   parameters:
-    maxConcurrency: 140
+    maxConcurrency: 160
 - type: round-robin-fairness-policy
 featureGates:
 - flowControl
@@ -148,6 +161,36 @@ if ! oc whoami &>/dev/null; then
 fi
 echo "Authenticated as: $(oc whoami)"
 
+# Save the live decode (model server) deployment spec alongside config.yml so
+# the experiment folder records exactly what served the run.
+oc -n "$NS" get deployment "$MODEL_DEPLOY" -o yaml > "${LOCAL_RESULTS}/decode-deployment.yaml" 2>/dev/null \
+  && echo "Saved decode deployment spec -> ${LOCAL_RESULTS}/decode-deployment.yaml" \
+  || echo "WARNING: could not save decode deployment spec for '${MODEL_DEPLOY}'"
+
+# --- Prepare EPP: image + per-request record log ---
+# Applied once before the orchestrator runs. These mutate the Deployment spec,
+# so they persist across the rollout restarts the orchestrator does per
+# strategy. A later `helm upgrade` would revert them; do not re-helm mid-run.
+if [ -n "$EPP_IMAGE" ]; then
+  echo "Setting EPP image: ${EPP_DEPLOY}/${EPP_CONTAINER} -> ${EPP_IMAGE}"
+  oc -n "$NS" set image "deployment/${EPP_DEPLOY}" "${EPP_CONTAINER}=${EPP_IMAGE}"
+  # :dev is mutable; force a fresh pull so a re-pushed tag is actually picked up.
+  oc -n "$NS" patch "deployment/${EPP_DEPLOY}" --type strategic -p \
+    "{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${EPP_CONTAINER}\",\"imagePullPolicy\":\"Always\"}]}}}}"
+fi
+
+if [ "$EPP_RECORDS" = "1" ]; then
+  echo "Enabling EPP per-request record log (EPP_REQUEST_RECORDS=1)"
+  oc -n "$NS" set env "deployment/${EPP_DEPLOY}" EPP_REQUEST_RECORDS=1
+else
+  echo "Disabling EPP per-request record log (EPP_REQUEST_RECORDS-)"
+  oc -n "$NS" set env "deployment/${EPP_DEPLOY}" EPP_REQUEST_RECORDS-
+fi
+
+# Roll out the EPP so the image/env above take effect before the first strategy.
+oc -n "$NS" rollout restart "deployment/${EPP_DEPLOY}"
+oc -n "$NS" rollout status "deployment/${EPP_DEPLOY}" --timeout=300s
+
 # --- Ensure PVC ---
 if ! oc -n "$NS" get pvc "$PVC_NAME" &>/dev/null; then
   echo "Creating PVC '$PVC_NAME'..."
@@ -168,6 +211,10 @@ fi
 # --- Ensure ConfigMaps ---
 oc -n "$NS" create configmap "$SCRAPER_CONFIGMAP" \
   --from-file=scrape_metrics.py="$SCRAPER_SCRIPT" \
+  --dry-run=client -o yaml | oc apply -f -
+
+oc -n "$NS" create configmap "$DRAINER_CONFIGMAP" \
+  --from-file=drain_records.py="$DRAINER_SCRIPT" \
   --dry-run=client -o yaml | oc apply -f -
 
 # Template config.yml with environment values before uploading
@@ -232,7 +279,7 @@ oc -n "$NS" delete job "$ORCHESTRATOR_JOB" --ignore-not-found
 
 # --- Submit orchestrator Job ---
 echo "Submitting orchestrator job..."
-cat <<'JOBEOF' | sed "s|__NS__|${NS}|g; s|__GUIDE_NAME__|${GUIDE_NAME}|g; s|__MODEL_DEPLOY__|${MODEL_DEPLOY}|g; s|__PVC_NAME__|${PVC_NAME}|g; s|__RUN_PREFIX__|${RUN_PREFIX}|g; s|__STRATEGIES__|${STRATEGIES}|g; s|__INFERENCE_PERF_IMAGE__|${INFERENCE_PERF_IMAGE}|g; s|__INFERENCE_PERF_CONFIGMAP__|${INFERENCE_PERF_CONFIGMAP}|g; s|__SCRAPER_CONFIGMAP__|${SCRAPER_CONFIGMAP}|g; s|__EPP_METRICS_URL__|${EPP_METRICS_URL}|g; s|__ORCHESTRATOR_JOB__|${ORCHESTRATOR_JOB}|g; s|__ORCHESTRATOR_SA__|${ORCHESTRATOR_SA}|g" | oc apply -f -
+cat <<'JOBEOF' | sed "s|__NS__|${NS}|g; s|__GUIDE_NAME__|${GUIDE_NAME}|g; s|__EPP_DEPLOY__|${EPP_DEPLOY}|g; s|__MODEL_DEPLOY__|${MODEL_DEPLOY}|g; s|__PVC_NAME__|${PVC_NAME}|g; s|__RUN_PREFIX__|${RUN_PREFIX}|g; s|__STRATEGIES__|${STRATEGIES}|g; s|__INFERENCE_PERF_IMAGE__|${INFERENCE_PERF_IMAGE}|g; s|__INFERENCE_PERF_CONFIGMAP__|${INFERENCE_PERF_CONFIGMAP}|g; s|__SCRAPER_CONFIGMAP__|${SCRAPER_CONFIGMAP}|g; s|__DRAINER_CONFIGMAP__|${DRAINER_CONFIGMAP}|g; s|__EPP_METRICS_URL__|${EPP_METRICS_URL}|g; s|__EPP_RECORDS_URL__|${EPP_RECORDS_URL}|g; s|__ORCHESTRATOR_JOB__|${ORCHESTRATOR_JOB}|g; s|__ORCHESTRATOR_SA__|${ORCHESTRATOR_SA}|g" | oc apply -f -
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -257,14 +304,17 @@ spec:
 
               NS="__NS__"
               GUIDE_NAME="__GUIDE_NAME__"
+              EPP_DEPLOY="__EPP_DEPLOY__"
               MODEL_DEPLOY="__MODEL_DEPLOY__"
               PVC_NAME="__PVC_NAME__"
               RUN_PREFIX="__RUN_PREFIX__"
               INFERENCE_PERF_IMAGE="__INFERENCE_PERF_IMAGE__"
               INFERENCE_PERF_CONFIGMAP="__INFERENCE_PERF_CONFIGMAP__"
               SCRAPER_CONFIGMAP="__SCRAPER_CONFIGMAP__"
+              DRAINER_CONFIGMAP="__DRAINER_CONFIGMAP__"
               EPP_METRICS_URL="__EPP_METRICS_URL__"
-              EPP_CM="${GUIDE_NAME}-epp"
+              EPP_RECORDS_URL="__EPP_RECORDS_URL__"
+              EPP_CM="${EPP_DEPLOY}"
               EPP_CM_KEY="agentic-serving-llama-plugins.yaml"
 
               STRATEGIES="__STRATEGIES__"
@@ -279,7 +329,7 @@ spec:
               - type: prefix-cache-scorer
               - type: concurrency-detector
                 parameters:
-                  maxConcurrency: 140
+                  maxConcurrency: 160
               - type: program-aware-fairness
                 parameters:
                   strategy: "las"
@@ -313,7 +363,7 @@ spec:
               - type: prefix-cache-scorer
               - type: concurrency-detector
                 parameters:
-                  maxConcurrency: 140
+                  maxConcurrency: 160
               - type: round-robin-fairness-policy
               featureGates:
               - flowControl
@@ -371,8 +421,8 @@ spec:
                 kubectl -n "$NS" patch cm "$EPP_CM" --type merge \
                   -p "{\"data\":{\"$EPP_CM_KEY\":$json_config}}"
 
-                kubectl -n "$NS" rollout restart deployment/"${GUIDE_NAME}-epp"
-                kubectl -n "$NS" rollout status deployment/"${GUIDE_NAME}-epp" --timeout=300s
+                kubectl -n "$NS" rollout restart deployment/"${EPP_DEPLOY}"
+                kubectl -n "$NS" rollout status deployment/"${EPP_DEPLOY}" --timeout=300s
                 echo "EPP ready with: $strategy"
               }
 
@@ -491,6 +541,30 @@ spec:
                             subPath: ${strategy}/metrics
                           - name: shared
                             mountPath: /data/shared
+                      - name: records-drainer
+                        image: python:3.12-alpine
+                        command: ["/bin/sh", "-c"]
+                        args:
+                          - |
+                            sleep 10
+                            python3 /scripts/drain_records.py \
+                              --url "${EPP_RECORDS_URL}" \
+                              --interval 5 \
+                              --duration 43200 \
+                              --done-file /data/shared/done \
+                              --output /data/records/records.jsonl
+                        resources:
+                          requests: {cpu: "100m", memory: "256Mi"}
+                          limits: {cpu: "500m", memory: "1Gi"}
+                        volumeMounts:
+                          - name: drainer-script
+                            mountPath: /scripts
+                            readOnly: true
+                          - name: results-volume
+                            mountPath: /data/records
+                            subPath: ${strategy}/records
+                          - name: shared
+                            mountPath: /data/shared
                     volumes:
                       - name: config-volume
                         configMap:
@@ -498,6 +572,9 @@ spec:
                       - name: scraper-script
                         configMap:
                           name: ${SCRAPER_CONFIGMAP}
+                      - name: drainer-script
+                        configMap:
+                          name: ${DRAINER_CONFIGMAP}
                       - name: results-volume
                         persistentVolumeClaim:
                           claimName: ${PVC_NAME}

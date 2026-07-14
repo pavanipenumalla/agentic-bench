@@ -21,6 +21,7 @@ fi
 source "${SCRIPT_DIR}/.env"
 
 NS="${NAMESPACE}"
+EPP_DEPLOY="${EPP_DEPLOY:-${GUIDE_NAME}-epp}"
 
 if [ $# -lt 1 ]; then
   echo "Usage: $0 <run-name-prefix>"
@@ -40,11 +41,15 @@ for strategy in las rr no-fairness; do
     need_download=true
     break
   fi
+  if [ ! -f "${LOCAL_RESULTS}/${strategy}/records/records.jsonl" ]; then
+    need_download=true
+    break
+  fi
 done
 
 # Save the current EPP config
 if ! [ -f "${LOCAL_RESULTS}/epp-configmap.yaml" ]; then
-  oc -n "$NS" get cm "agentic-serving-epp" -o yaml > "${LOCAL_RESULTS}/epp-configmap.yaml" 2>/dev/null || true
+  oc -n "$NS" get cm "${EPP_DEPLOY}" -o yaml > "${LOCAL_RESULTS}/epp-configmap.yaml" 2>/dev/null || true
 fi
 
 if [ "$need_download" = true ]; then
@@ -97,6 +102,16 @@ EOF
       oc -n "$NS" cp "${HELPER_POD}:/data/${strategy}/metrics/" "$metrics_dir/" 2>/dev/null && \
         echo "  ✓ metrics → $metrics_dir" || \
         echo "  ✗ metrics not found"
+    fi
+
+    records_dir="${LOCAL_RESULTS}/${strategy}/records"
+    if [ -f "${records_dir}/records.jsonl" ]; then
+      echo "  SKIP: records already downloaded"
+    else
+      mkdir -p "$records_dir"
+      oc -n "$NS" cp "${HELPER_POD}:/data/${strategy}/records/" "$records_dir/" 2>/dev/null && \
+        echo "  ✓ records → $records_dir" || \
+        echo "  ✗ records not found"
     fi
   done
 
