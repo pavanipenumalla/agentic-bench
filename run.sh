@@ -76,7 +76,32 @@ kind: EndpointPickerConfig
 plugins:
 - type: queue-scorer
 - type: kv-cache-utilization-scorer
+- type: metrics-data-source
+- type: core-metrics-extractor
+- type: endpoint-notification-source
+- type: token-producer
+  parameters:
+    modelName: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8
+    vllm:
+      url: http://localhost:8000
+- type: precise-prefix-cache-producer
+  parameters:
+    tokenProcessorConfig:
+      blockSizeTokens: 64
+    kvEventsConfig:
+      topicFilter: "kv@"
+      concurrency: 8
+      discoverPods: true
+      podDiscoveryConfig:
+        socketPort: 5556
+        podLabelSelector: "llm-d.ai/role=decode"
+        podNamespace: dasari
 - type: prefix-cache-scorer
+  name: approx-prefix-scorer
+- type: prefix-cache-scorer
+  name: precise-prefix-scorer
+  parameters:
+    prefixMatchInfoProducerName: precise-prefix-cache-producer
 - type: concurrency-detector
   parameters:
     maxConcurrency: 160
@@ -86,6 +111,9 @@ plugins:
     lasWeightService: 0.8
     lasWeightHeadWait: 0.2
     lasHalfLifeSeconds: 120
+- type: program-aware-scorer
+  parameters:
+    missThreshold: 3
 featureGates:
 - flowControl
 flowControl:
@@ -93,6 +121,14 @@ flowControl:
     pluginRef: concurrency-detector
   defaultPriorityBand:
     fairnessPolicyRef: program-aware-fairness
+dataLayer:
+  sources:
+  - pluginRef: metrics-data-source
+    extractors:
+    - pluginRef: core-metrics-extractor
+  - pluginRef: endpoint-notification-source
+    extractors:
+    - pluginRef: precise-prefix-cache-producer
 schedulingProfiles:
 - name: default
   plugins:
@@ -100,8 +136,12 @@ schedulingProfiles:
     weight: 2
   - pluginRef: kv-cache-utilization-scorer
     weight: 2
-  - pluginRef: prefix-cache-scorer
-    weight: 3
+  - pluginRef: approx-prefix-scorer
+    weight: 0
+  - pluginRef: precise-prefix-scorer
+    weight: 10
+  - pluginRef: program-aware-scorer
+    weight: 0
 YAML
     ;;
     rr) cat > "${LOCAL_RESULTS}/rr-epp-plugins.yaml" << 'YAML'
@@ -130,7 +170,7 @@ schedulingProfiles:
   - pluginRef: kv-cache-utilization-scorer
     weight: 2
   - pluginRef: prefix-cache-scorer
-    weight: 3
+    weight: 0
 YAML
     ;;
     no-fairness) cat > "${LOCAL_RESULTS}/no-fairness-epp-plugins.yaml" << 'YAML'
@@ -148,7 +188,7 @@ schedulingProfiles:
   - pluginRef: kv-cache-utilization-scorer
     weight: 2
   - pluginRef: prefix-cache-scorer
-    weight: 3
+    weight: 0
 YAML
     ;;
   esac
@@ -326,7 +366,32 @@ spec:
               plugins:
               - type: queue-scorer
               - type: kv-cache-utilization-scorer
+              - type: metrics-data-source
+              - type: core-metrics-extractor
+              - type: endpoint-notification-source
+              - type: token-producer
+                parameters:
+                  modelName: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-FP8
+                  vllm:
+                    url: http://localhost:8000
+              - type: precise-prefix-cache-producer
+                parameters:
+                  tokenProcessorConfig:
+                    blockSizeTokens: 64
+                  kvEventsConfig:
+                    topicFilter: "kv@"
+                    concurrency: 8
+                    discoverPods: true
+                    podDiscoveryConfig:
+                      socketPort: 5556
+                      podLabelSelector: "llm-d.ai/role=decode"
+                      podNamespace: dasari
               - type: prefix-cache-scorer
+                name: approx-prefix-scorer
+              - type: prefix-cache-scorer
+                name: precise-prefix-scorer
+                parameters:
+                  prefixMatchInfoProducerName: precise-prefix-cache-producer
               - type: concurrency-detector
                 parameters:
                   maxConcurrency: 160
@@ -336,6 +401,9 @@ spec:
                   lasWeightService: 0.8
                   lasWeightHeadWait: 0.2
                   lasHalfLifeSeconds: 120
+              - type: program-aware-scorer
+                parameters:
+                  missThreshold: 3
               featureGates:
               - flowControl
               flowControl:
@@ -343,6 +411,14 @@ spec:
                   pluginRef: concurrency-detector
                 defaultPriorityBand:
                   fairnessPolicyRef: program-aware-fairness
+              dataLayer:
+                sources:
+                - pluginRef: metrics-data-source
+                  extractors:
+                  - pluginRef: core-metrics-extractor
+                - pluginRef: endpoint-notification-source
+                  extractors:
+                  - pluginRef: precise-prefix-cache-producer
               schedulingProfiles:
               - name: default
                 plugins:
@@ -350,8 +426,12 @@ spec:
                   weight: 2
                 - pluginRef: kv-cache-utilization-scorer
                   weight: 2
-                - pluginRef: prefix-cache-scorer
-                  weight: 3
+                - pluginRef: approx-prefix-scorer
+                  weight: 0
+                - pluginRef: precise-prefix-scorer
+                  weight: 10
+                - pluginRef: program-aware-scorer
+                  weight: 0
               YAMLEOF
 
               read -r -d '' CONFIG_RR << 'YAMLEOF' || true
@@ -380,7 +460,7 @@ spec:
                 - pluginRef: kv-cache-utilization-scorer
                   weight: 2
                 - pluginRef: prefix-cache-scorer
-                  weight: 3
+                  weight: 0
               YAMLEOF
 
               read -r -d '' CONFIG_NO_FAIRNESS << 'YAMLEOF' || true
@@ -398,7 +478,7 @@ spec:
                 - pluginRef: kv-cache-utilization-scorer
                   weight: 2
                 - pluginRef: prefix-cache-scorer
-                  weight: 3
+                  weight: 0
               YAMLEOF
 
               get_config() {
@@ -430,7 +510,7 @@ spec:
                 echo "=== Flushing model server ==="
                 kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=0
                 kubectl -n "$NS" rollout status deployment/"$MODEL_DEPLOY" --timeout=120s
-                kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=2
+                kubectl -n "$NS" scale deployment/"$MODEL_DEPLOY" --replicas=3
 
                 for i in $(seq 1 30); do
                   if kubectl -n "$NS" rollout status deployment/"$MODEL_DEPLOY" --timeout=60s 2>/dev/null; then
