@@ -34,6 +34,10 @@ Cluster-level framework metrics (no fairness_id label):
   dispatch_cycle_duration_seconds       histogram (no labels)
   pool_saturation                       gauge per inference_pool
 
+Per-endpoint (per-pod) pool gauges, keyed by model_server_endpoint:
+  per_endpoint_queue_size               gauge per pod (waiting queue)
+  per_endpoint_running_requests         gauge per pod (running requests)
+
 Cache metrics (all histograms under the llm_d_epp subsystem):
   prefix_indexer_hit_ratio              histogram per plugin_name (prefix
                                           length matched / total, router-side)
@@ -42,6 +46,9 @@ Cache metrics (all histograms under the llm_d_epp subsystem):
   request_cached_tokens                 histogram per fairness_id (prompt
                                           tokens served from cache, as reported
                                           by the model server)
+  All three also carry an endpoint (pod) label; a *_by_pod breakdown keyed by
+  endpoint is captured alongside the plugin_name/fairness_id rollups so cache
+  reuse can be attributed per pod (prefill and decode alike).
   Raw sum/count are stored per scrape so the visualizer can render a
   cumulative mean or a step delta without re-scraping.
 
@@ -289,9 +296,14 @@ def collect_program_aware(metrics: Dict[str, float]) -> dict:
 def collect_endpoint_pool(metrics: Dict[str, float]) -> dict:
     """Build the inference-pool / endpoint metric block.
 
-    Values are means across all ready endpoints in the pool, computed by the
-    EPP datalayer logger from per-endpoint scraped metrics. The pool name is
-    carried in the 'name' label.
+    per_pool values are means across all ready endpoints in the pool, computed
+    by the EPP datalayer logger; the pool name is carried in the 'name' label.
+
+    per_pod carries the per-endpoint gauges keyed by 'model_server_endpoint'
+    (pod name): queue_size from llm_d_epp_per_endpoint_queue_size and
+    running_requests from llm_d_epp_per_endpoint_running_requests. These surface
+    a hot/cold pod (or a prefill vs decode pod) individually rather than as the
+    pool mean.
     """
     PREFIX = "llm_d_epp"
     kv_cache    = extract_by_label(metrics, f"{PREFIX}_average_kv_cache_utilization", "name")
@@ -309,7 +321,18 @@ def collect_endpoint_pool(metrics: Dict[str, float]) -> dict:
         }
         for pool in sorted(all_pools)
     }
-    return {"per_pool": per_pool}
+
+    qsize_pod = extract_by_label(metrics, f"{PREFIX}_per_endpoint_queue_size",       "model_server_endpoint")
+    run_pod   = extract_by_label(metrics, f"{PREFIX}_per_endpoint_running_requests", "model_server_endpoint")
+    all_pods = set(qsize_pod) | set(run_pod)
+    per_pod = {
+        pod: {
+            "queue_size":       qsize_pod.get(pod),
+            "running_requests": run_pod.get(pod),
+        }
+        for pod in sorted(all_pods)
+    }
+    return {"per_pool": per_pool, "per_pod": per_pod}
 
 
 def collect_flow_control(metrics: Dict[str, float]) -> dict:
@@ -417,17 +440,25 @@ def collect_cache_metrics(metrics: Dict[str, float]) -> dict:
     """Build the cache-reuse metric block.
 
     prefix_indexer_* are keyed by plugin_name (the prefix scorer); one entry
-    per loaded scorer. request_cached_tokens is keyed by fairness_id. Raw
-    sum/count are preserved per key for downstream mean/delta computation.
+    per loaded scorer. request_cached_tokens is keyed by fairness_id. All three
+    also carry an endpoint (pod) label, captured under *_by_pod so cache reuse
+    can be attributed per pod (prefill and decode alike). Raw sum/count are
+    preserved per key for downstream mean/delta computation.
     """
     PREFIX = "llm_d_epp"
     hit_ratio = sum_count_by_label(metrics, f"{PREFIX}_prefix_indexer_hit_ratio", "plugin_name")
     hit_bytes = sum_count_by_label(metrics, f"{PREFIX}_prefix_indexer_hit_bytes", "plugin_name")
     cached_tokens = sum_count_by_label(metrics, f"{PREFIX}_request_cached_tokens", "fairness_id")
+    hit_ratio_by_pod = sum_count_by_label(metrics, f"{PREFIX}_prefix_indexer_hit_ratio", "endpoint")
+    hit_bytes_by_pod = sum_count_by_label(metrics, f"{PREFIX}_prefix_indexer_hit_bytes", "endpoint")
+    cached_tokens_by_pod = sum_count_by_label(metrics, f"{PREFIX}_request_cached_tokens", "endpoint")
     return {
-        "prefix_hit_ratio": hit_ratio,      # {plugin_name: {sum, count}}
-        "prefix_hit_bytes": hit_bytes,      # {plugin_name: {sum, count}}
-        "cached_tokens":    cached_tokens,  # {fairness_id: {sum, count}}
+        "prefix_hit_ratio":        hit_ratio,             # {plugin_name: {sum, count}}
+        "prefix_hit_bytes":        hit_bytes,             # {plugin_name: {sum, count}}
+        "cached_tokens":           cached_tokens,         # {fairness_id: {sum, count}}
+        "prefix_hit_ratio_by_pod": hit_ratio_by_pod,      # {endpoint: {sum, count}}
+        "prefix_hit_bytes_by_pod": hit_bytes_by_pod,      # {endpoint: {sum, count}}
+        "cached_tokens_by_pod":    cached_tokens_by_pod,  # {endpoint: {sum, count}}
     }
 
 

@@ -287,6 +287,16 @@ const sum = a => a.reduce((s,x)=>s+x,0);
 function pct(arr, p){ if(!arr.length) return 0; const s=[...arr].sort((a,b)=>a-b); return s[Math.min(s.length-1, Math.floor(p/100*s.length))]; }
 const hms = ms => new Date(ms).toISOString().substr(11,8);
 function podColorVar(i){ return `var(--series-${(i%6)+1})`; }
+/* Prefix hit ratio for table/stats: prefer the precise producer, then any
+   producer in the new `prefix` map, then the old flat field. */
+function prefixHitRatio(r){
+  if(r.prefix && Object.keys(r.prefix).length){
+    const p=r.prefix;
+    const src=p['precise-prefix-cache-producer'] || p['precise-prefix-scorer'] || p[Object.keys(p).sort()[0]];
+    return (src && src.primary && src.primary.hit_ratio) || 0;
+  }
+  return r.prefix_hit_ratio||0;
+}
 function kvColor(u){ if(u<0.15)return'var(--seq-100)'; if(u<0.35)return'var(--seq-250)'; if(u<0.6)return'var(--seq-400)'; if(u<0.85)return'var(--seq-550)'; return'var(--seq-700)'; }
 
 let RECORDS = [], PROGRAMS = new Map(), ALL_PODS = [], POD_INDEX = new Map();
@@ -326,7 +336,7 @@ function computeProgramStats(recs){
     e2e.push(r.ts_complete_ms-r.ts_received_ms);
     decode.push(r.ts_complete_ms-r.ts_first_token_ms);
     inTok.push(r.input_tokens); outTok.push(r.output_tokens);
-    cached.push(r.cached_tokens); prefix.push(r.prefix_hit_ratio||0);
+    cached.push(r.cached_tokens); prefix.push(prefixHitRatio(r));
     const chosen=(r.target_pods&&r.target_pods[0])||r.target_endpoint;
     podCount.set(chosen,(podCount.get(chosen)||0)+1);
     for(const [pod,st] of Object.entries(r.pod_state_at_dispatch||{})){
@@ -522,15 +532,23 @@ function svgTimeline(recs){
     const col=podColorVar(POD_INDEX.get(chosen));
     const x0=sx(r.ts_received_ms), xft=sx(r.ts_first_token_ms), xEnd=sx(r.ts_complete_ms);
     const full=Math.max(TL.minBar, xEnd-x0);
-    const waitW=Math.max(0, Math.min(full, xft-x0));
-    const decW=Math.max(0, full-waitW);
+    // Three segments when ts_dispatched_ms is present: queue [received,dispatched]
+    // (lightest), prefill [dispatched,first_token] (medium), decode [first_token,
+    // complete] (solid). Falls back to two segments (wait+decode) for old records
+    // that predate ts_dispatched_ms.
+    const hasDisp=r.ts_dispatched_ms>0 && r.ts_dispatched_ms>=r.ts_received_ms && r.ts_dispatched_ms<=r.ts_first_token_ms;
+    const xdisp=hasDisp?sx(r.ts_dispatched_ms):x0;
+    const queueW=Math.max(0, Math.min(full, xdisp-x0));
+    const prefillW=Math.max(0, Math.min(full-queueW, xft-Math.max(x0,xdisp)));
+    const decW=Math.max(0, full-queueW-prefillW);
     const label=r.request_id.slice(0,8);
     return `<g class="tlbar ${i===SEL_REQ?'sel':''}" data-req="${i}"
               onclick="selectRequest(${i})"
               onpointerenter="timelineHover(event,${i})" onpointerleave="timelineLeave()">
       <text x="${TL.labW-6}" y="${y+h/2+4}" font-size="10.5" fill="var(--muted)" text-anchor="end" font-family="ui-monospace,monospace">${label}</text>
-      <rect class="wait" x="${x0.toFixed(1)}" y="${y}" width="${waitW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}" opacity="0.32"/>
-      <rect class="bar" x="${(x0+waitW).toFixed(1)}" y="${y}" width="${decW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}"/>
+      <rect class="queue" x="${x0.toFixed(1)}" y="${y}" width="${queueW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}" opacity="0.18"/>
+      <rect class="wait" x="${(x0+queueW).toFixed(1)}" y="${y}" width="${prefillW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}" opacity="0.45"/>
+      <rect class="bar" x="${(x0+queueW+prefillW).toFixed(1)}" y="${y}" width="${decW.toFixed(1)}" height="${h}" rx="2" style="fill:${col}"/>
       <rect class="sel-ring" x="${(x0-1).toFixed(1)}" y="${y-1}" width="${(full+2).toFixed(1)}" height="${h+2}" rx="3" fill="none"/>
       <rect class="hit" x="${x0.toFixed(1)}" y="${y-1}" width="${Math.max(full,6).toFixed(1)}" height="${h+2}" fill="transparent"/>
     </g>`;
@@ -559,9 +577,15 @@ function timelineHover(ev,i){
   const r=SHOWN[i]; const tip=document.getElementById('tlTip'); if(!tip) return;
   const ttft=r.ts_first_token_ms-r.ts_received_ms, e2e=r.ts_complete_ms-r.ts_received_ms;
   const chosen=(r.target_pods&&r.target_pods[0])||'';
+  const hasDisp=r.ts_dispatched_ms>0 && r.ts_dispatched_ms>=r.ts_received_ms && r.ts_dispatched_ms<=r.ts_first_token_ms;
+  const stage=hasDisp
+    ? `<div class="tt-row">queue<b>${fmtMs(r.ts_dispatched_ms-r.ts_received_ms)}</b></div>
+       <div class="tt-row">prefill<b>${fmtMs(r.ts_first_token_ms-r.ts_dispatched_ms)}</b></div>`
+    : `<div class="tt-row">TTFT<b>${fmtMs(ttft)}</b></div>`;
   tip.innerHTML=`<div class="tt-x">${r.request_id.slice(0,8)} · ${new Date(r.ts_received_ms).toISOString().substr(11,12)}</div>
     <div class="tt-row"><span class="tt-sw" style="background:${podColorVar(POD_INDEX.get(chosen))}"></span>${POD_SHORT(chosen)}</div>
-    <div class="tt-row">TTFT<b>${fmtMs(ttft)}</b></div>
+    ${stage}
+    <div class="tt-row">decode<b>${fmtMs(r.ts_complete_ms-r.ts_first_token_ms)}</b></div>
     <div class="tt-row">E2E<b>${fmtMs(e2e)}</b></div>
     <div class="tt-row">tokens<b>${r.input_tokens} in / ${r.output_tokens} out</b></div>`;
   tip.style.display='block';
@@ -811,7 +835,7 @@ function reqRowHTML(i){
     <td class="mono">${new Date(r.ts_received_ms).toISOString().substr(11,12)}</td>
     <td class="mono">${r.request_id.slice(0,8)}</td>
     <td>${r.input_tokens}</td><td>${r.output_tokens}</td><td>${r.cached_tokens}</td>
-    <td>${fmtPct(r.prefix_hit_ratio||0)}</td><td>${fmtMs(ttft)}</td><td>${fmtMs(e2e)}</td>
+    <td>${fmtPct(prefixHitRatio(r))}</td><td>${fmtMs(ttft)}</td><td>${fmtMs(e2e)}</td>
     <td>${dot}<span class="podname">${POD_SHORT(chosen)}</span></td></tr>`;
 }
 const REQ_HEAD=`<thead><tr><th>Received</th><th>Req id</th><th>In</th><th>Out</th><th>Cached</th><th>Prefix hit</th><th>TTFT</th><th>E2E</th><th>Chosen pod</th></tr></thead>`;
@@ -820,11 +844,49 @@ function highlightSelected(){
   document.querySelectorAll('tr.req.sel, .tlbar.sel').forEach(t=>t.classList.remove('sel'));
   if(SEL_REQ!=null) document.querySelectorAll(`tr.req[data-req="${SEL_REQ}"], .tlbar[data-req="${SEL_REQ}"]`).forEach(t=>t.classList.add('sel'));
 }
-/* detail panel below the table: request fields + pod-state-at-dispatch + concurrent group */
+/* Prefix predictions per producer. Renders one table per producer from the
+   producer-keyed `prefix` map; falls back to the old flat fields (prefix_hit_*
+   and pod_state_at_dispatch[].prefix_match_blocks) for pre-schema records. */
+function prefixSourcesHTML(r, pods, chosen){
+  const podRow=(pod,pm)=>{
+    const isChosen=pod===chosen;
+    return `<tr class="${isChosen?'chosenpod':''}">
+      <td><span class="podname">${POD_SHORT(pod)}</span> ${isChosen?'<span class="chip chosen">chosen</span>':''}</td>
+      <td>${pm&&pm.match_blocks!=null?pm.match_blocks:'—'}</td>
+      <td>${pm&&pm.cached_block_count!=null?pm.cached_block_count:'—'}</td>
+    </tr>`;
+  };
+  const srcTable=(name,src)=>{
+    const rows=pods.map(pod=>podRow(pod,(src.per_pod||{})[pod])).join('');
+    const p=src.primary||{};
+    return `<h4>Prefix: ${name} <span class="light" style="text-transform:none;letter-spacing:0">(primary hit ${fmtPct(p.hit_ratio||0)}, ${p.hit_blocks||0}/${p.total_blocks||0} blk @ ${p.block_size||0} tok)</span></h4>
+      <table>
+        <thead><tr><th>Pod</th><th>Match blk</th><th>Cached blk</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  };
+  if(r.prefix && Object.keys(r.prefix).length){
+    return Object.keys(r.prefix).sort().map(name=>srcTable(name, r.prefix[name])).join('');
+  }
+  // Fallback: old flat schema (single approximate source).
+  if(r.prefix_total_blocks!=null || r.prefix_hit_ratio!=null){
+    const ps=r.pod_state_at_dispatch||{};
+    const per_pod={};
+    for(const pod of pods){ const b=(ps[pod]||{}).prefix_match_blocks; if(b!=null) per_pod[pod]={match_blocks:b,cached_block_count:b}; }
+    return srcTable('approximate (legacy record)', {
+      primary:{hit_ratio:r.prefix_hit_ratio,hit_blocks:r.prefix_hit_blocks,total_blocks:r.prefix_total_blocks,block_size:r.prefix_block_size},
+      per_pod
+    });
+  }
+  return '';
+}
+
+/* detail panel below the table: request fields + pod-state-at-dispatch + prefix + concurrent group */
 function requestDetailHTML(i){
   const r=SHOWN[i];
   const chosen=(r.target_pods&&r.target_pods[0])||'';
   const ttft=r.ts_first_token_ms-r.ts_received_ms, e2e=r.ts_complete_ms-r.ts_received_ms, dec=r.ts_complete_ms-r.ts_first_token_ms;
+  const hasDisp=r.ts_dispatched_ms>0 && r.ts_dispatched_ms>=r.ts_received_ms && r.ts_dispatched_ms<=r.ts_first_token_ms;
   const kv=(label,val)=>`<div><span>${label}</span><b>${val}</b></div>`;
 
   const ps=r.pod_state_at_dispatch||{};
@@ -836,9 +898,12 @@ function requestDetailHTML(i){
       <td>${kvu==null?'—':`<span class="kvbar"><i style="width:${Math.min(100,kvu*100).toFixed(1)}%;background:${kvColor(kvu)}"></i></span> ${fmtPct(kvu)}`}</td>
       <td>${st.queue_size==null?'—':st.queue_size}</td>
       <td>${st.running_requests==null?'—':st.running_requests}</td>
-      <td>${st.prefix_match_blocks==null?'—':st.prefix_match_blocks}</td>
     </tr>`;
   }).join('');
+
+  // Prefix sources: new producer-keyed `prefix` map, with fallback to the old
+  // flat fields (records that predate the producer-keyed schema).
+  const prefixHTML=prefixSourcesHTML(r, pods, chosen);
 
   // concurrent group: the requests that were actually in flight at the same time
   // as this one (their intervals overlap this request's [received, complete]).
@@ -871,20 +936,22 @@ function requestDetailHTML(i){
     <div class="kv">
       ${kv('Request id', `<span style="font-family:ui-monospace,monospace">${r.request_id}</span>`)}
       ${kv('Received', new Date(r.ts_received_ms).toISOString().substr(11,12))}
+      ${hasDisp?kv('Queue (recv&rarr;dispatch)', fmtMs(r.ts_dispatched_ms-r.ts_received_ms)):''}
+      ${hasDisp?kv('Prefill (dispatch&rarr;1st tok)', fmtMs(r.ts_first_token_ms-r.ts_dispatched_ms)):''}
       ${kv('TTFT (gateway)', fmtMs(ttft))}
-      ${kv('End-to-end', fmtMs(e2e))}
       ${kv('Decode', fmtMs(dec))}
+      ${kv('End-to-end', fmtMs(e2e))}
       ${kv('Input tokens', fmtInt(r.input_tokens))}
       ${kv('Output tokens', fmtInt(r.output_tokens))}
       ${kv('Cached tokens', fmtInt(r.cached_tokens))}
-      ${kv('Prefix hit', `${fmtPct(r.prefix_hit_ratio||0)} (${r.prefix_hit_blocks}/${r.prefix_total_blocks} blk)`)}
       ${kv('Chosen pod', `<span class="podname">${POD_SHORT(chosen)}</span>`)}
     </div>
     <h4>Pod state at dispatch <span class="light" style="text-transform:none;letter-spacing:0">(all candidates; chosen highlighted)</span></h4>
     <table>
-      <thead><tr><th>Pod</th><th>KV util</th><th>Queue</th><th>Running</th><th>Prefix match blk</th></tr></thead>
+      <thead><tr><th>Pod</th><th>KV util</th><th>Queue</th><th>Running</th></tr></thead>
       <tbody>${podRows}</tbody>
     </table>
+    ${prefixHTML}
     <h4>Overlapping requests <span class="light" style="text-transform:none;letter-spacing:0">(${grpCount} request${grpCount>1?'s':''} in flight together${others.length?'; click a row to inspect it':''})</span></h4>
     ${groupHTML}
   </div>`;
